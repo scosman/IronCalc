@@ -2,3 +2,4 @@ target/*
 **/node_modules/**
 .DS_Store
 webapp/IronCalc/tests/example.ic
+.specs_skill_state/
