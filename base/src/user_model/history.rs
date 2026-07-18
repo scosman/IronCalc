@@ -282,6 +282,29 @@ pub(crate) enum Diff {
         priority_a: u32,
         priority_b: u32,
     },
+    // Merged cell diffs
+    MergeCells {
+        sheet: u32,
+        row: i32,
+        column: i32,
+        width: i32,
+        height: i32,
+        // Content discarded from the covered cells, row-major over the region.
+        // The anchor slot is `None` (its content is kept, not discarded). Used
+        // to restore the covered content on undo. Dense: one `Option<Cell>` per
+        // cell in the rectangle (empty cells included), which is fine under the
+        // "merges are small" assumption.
+        old_covered: Vec<Vec<Option<Cell>>>,
+    },
+    UnmergeCells {
+        sheet: u32,
+        row: i32,
+        column: i32,
+        width: i32,
+        height: i32,
+        // Covered cells were already empty; nothing to restore. The region is
+        // enough to re-add on undo.
+    },
     // FIXME: we are missing SetViewDiffs
 }
 

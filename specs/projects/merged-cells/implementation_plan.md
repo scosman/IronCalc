@@ -10,7 +10,7 @@ exact file:line targets.
 
 ## Phases
 
-- [ ] **Phase 1 — Core API + undo/redo.** `MergeCell` type (`types.rs`);
+- [x] **Phase 1 — Core API + undo/redo.** `MergeCell` type (`types.rs`);
   `Worksheet` helpers `merge_cells_parsed` / `merge_at` + A1<->index conversion
   (`worksheet.rs`); base `Model::{merge_cells, unmerge_cells, get_merge_cells,
   get_merge_cell}` with full validation (bounds, degenerate, overlap,

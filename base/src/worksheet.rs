@@ -1,10 +1,56 @@
 use crate::constants::{self, LAST_COLUMN, LAST_ROW};
 use crate::expressions::types::CellReferenceIndex;
-use crate::expressions::utils::{is_valid_column_number, is_valid_row};
+use crate::expressions::utils::{
+    is_valid_column_number, is_valid_row, number_to_column, parse_reference_a1,
+};
 use crate::model::CellStructure;
 use crate::{expressions::token::Error, types::*};
 
 use std::collections::HashMap;
+
+/// Converts a [`MergeCell`] to its normalized A1 range string, e.g. `"B2:D4"`.
+///
+/// Returns `None` only if the anchor or bottom-right corner falls outside the
+/// valid column range, which cannot happen for a region that passed merge
+/// validation.
+pub(crate) fn merge_cell_to_a1(m: &MergeCell) -> Option<String> {
+    let start_column = number_to_column(m.column)?;
+    let end_column = number_to_column(m.column + m.width - 1)?;
+    let start_row = m.row;
+    let end_row = m.row + m.height - 1;
+    Some(format!("{start_column}{start_row}:{end_column}{end_row}"))
+}
+
+/// Parses a stored A1 range string like `"B2:D4"` into a [`MergeCell`].
+///
+/// A single reference without a colon (e.g. `"B2"`) is treated as a 1x1 region.
+/// Returns `None` for any string that does not parse, so callers can skip
+/// malformed stored ranges defensively.
+pub(crate) fn a1_to_merge_cell(range: &str) -> Option<MergeCell> {
+    let parts: Vec<&str> = range.splitn(2, ':').collect();
+    match parts.as_slice() {
+        [single] => {
+            let reference = parse_reference_a1(single)?;
+            Some(MergeCell {
+                row: reference.row,
+                column: reference.column,
+                width: 1,
+                height: 1,
+            })
+        }
+        [start, end] => {
+            let start = parse_reference_a1(start)?;
+            let end = parse_reference_a1(end)?;
+            Some(MergeCell {
+                row: start.row.min(end.row),
+                column: start.column.min(end.column),
+                width: (start.column - end.column).abs() + 1,
+                height: (start.row - end.row).abs() + 1,
+            })
+        }
+        _ => None,
+    }
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct WorksheetDimension {
@@ -877,6 +923,59 @@ impl Worksheet {
                 Ok(found_cells.previous_cell)
             }
         }
+    }
+
+    /// Returns all merged regions on the sheet as normalized [`MergeCell`]s.
+    ///
+    /// Unparseable stored range strings are skipped defensively.
+    pub(crate) fn merge_cells_parsed(&self) -> Vec<MergeCell> {
+        self.merge_cells
+            .iter()
+            .filter_map(|range| a1_to_merge_cell(range))
+            .collect()
+    }
+
+    /// Returns the merged region covering `(row, column)` — anchor or interior —
+    /// if any.
+    pub(crate) fn merge_at(&self, row: i32, column: i32) -> Option<MergeCell> {
+        self.merge_cells_parsed()
+            .into_iter()
+            .find(|m| Worksheet::merge_contains(m, row, column))
+    }
+
+    /// Returns true if `(row, column)` lies inside the region `m`.
+    pub(crate) fn merge_contains(m: &MergeCell, row: i32, column: i32) -> bool {
+        row >= m.row && row < m.row + m.height && column >= m.column && column < m.column + m.width
+    }
+
+    /// Appends `m` to the merge list and clears the content of every covered
+    /// (non-anchor) cell, preserving each cleared cell's style. Used by the
+    /// merge redo and unmerge undo paths, which do not need to record the
+    /// discarded content.
+    pub(crate) fn apply_merge(&mut self, m: &MergeCell) {
+        for row in m.row..m.row + m.height {
+            for column in m.column..m.column + m.width {
+                if row == m.row && column == m.column {
+                    continue;
+                }
+                if self.cell(row, column).is_some() {
+                    let _ = self.cell_clear_contents(row, column);
+                }
+            }
+        }
+        if let Some(range) = merge_cell_to_a1(m) {
+            self.merge_cells.push(range);
+        }
+    }
+
+    /// Removes the stored merged region that contains `(row, column)`, returning
+    /// it. Returns `None` (and removes nothing) if the cell is not merged.
+    pub(crate) fn remove_merge_at(&mut self, row: i32, column: i32) -> Option<MergeCell> {
+        let position = self.merge_cells.iter().position(|range| {
+            a1_to_merge_cell(range).is_some_and(|m| Worksheet::merge_contains(&m, row, column))
+        })?;
+        let removed = self.merge_cells.remove(position);
+        a1_to_merge_cell(&removed)
     }
 }
 

@@ -4,7 +4,7 @@ use crate::{
     cf_types::ConditionalFormatting,
     constants::COLUMN_WIDTH_FACTOR,
     expressions::types::Area,
-    types::{ArrayKind, Cell, Style},
+    types::{ArrayKind, Cell, MergeCell, Style},
     UserModel,
 };
 
@@ -602,6 +602,54 @@ impl<'a> UserModel<'a> {
                     }
                     needs_evaluation = true;
                 }
+                Diff::MergeCells {
+                    sheet,
+                    row,
+                    column,
+                    width,
+                    height,
+                    old_covered,
+                } => {
+                    needs_evaluation = true;
+                    // Remove the region, then restore the covered content that
+                    // the merge discarded.
+                    self.model
+                        .workbook
+                        .worksheet_mut(*sheet)?
+                        .remove_merge_at(*row, *column);
+                    for r in *row..*row + *height {
+                        for c in *column..*column + *width {
+                            let row_index = (r - *row) as usize;
+                            let col_index = (c - *column) as usize;
+                            if let Some(value) = old_covered[row_index][col_index].clone() {
+                                self.model
+                                    .workbook
+                                    .worksheet_mut(*sheet)?
+                                    .update_cell(r, c, value)?;
+                            }
+                        }
+                    }
+                }
+                Diff::UnmergeCells {
+                    sheet,
+                    row,
+                    column,
+                    width,
+                    height,
+                } => {
+                    needs_evaluation = true;
+                    // Re-merge: the covered cells were already empty.
+                    let region = MergeCell {
+                        row: *row,
+                        column: *column,
+                        width: *width,
+                        height: *height,
+                    };
+                    self.model
+                        .workbook
+                        .worksheet_mut(*sheet)?
+                        .apply_merge(&region);
+                }
             }
         }
         if needs_evaluation {
@@ -1013,6 +1061,41 @@ impl<'a> UserModel<'a> {
                         cf.priority = *priority_a;
                     }
                     needs_evaluation = true;
+                }
+                Diff::MergeCells {
+                    sheet,
+                    row,
+                    column,
+                    width,
+                    height,
+                    old_covered: _,
+                } => {
+                    needs_evaluation = true;
+                    // Redo: re-apply the merge (clears covered content, adds the
+                    // range). The discarded content is already captured for undo.
+                    let region = MergeCell {
+                        row: *row,
+                        column: *column,
+                        width: *width,
+                        height: *height,
+                    };
+                    self.model
+                        .workbook
+                        .worksheet_mut(*sheet)?
+                        .apply_merge(&region);
+                }
+                Diff::UnmergeCells {
+                    sheet,
+                    row,
+                    column,
+                    width: _,
+                    height: _,
+                } => {
+                    needs_evaluation = true;
+                    self.model
+                        .workbook
+                        .worksheet_mut(*sheet)?
+                        .remove_merge_at(*row, *column);
                 }
             }
         }

@@ -806,6 +806,24 @@ pub struct Border {
     pub diagonal: Option<BorderItem>,
 }
 
+/// A normalized, index-based view of a merged region.
+///
+/// Merged regions are stored on [`Worksheet::merge_cells`] as A1 range strings
+/// (e.g. `"B2:D4"`); `MergeCell` is the typed value the API exposes. It is a
+/// value type (never stored) and its shape mirrors
+/// [`crate::expressions::types::Area`] minus the sheet.
+#[derive(Serialize, Deserialize, Encode, Decode, Debug, PartialEq, Eq, Clone)]
+pub struct MergeCell {
+    /// Row of the anchor (top-left) cell.
+    pub row: i32,
+    /// Column of the anchor (top-left) cell.
+    pub column: i32,
+    /// Number of columns the region spans (>= 1).
+    pub width: i32,
+    /// Number of rows the region spans (>= 1).
+    pub height: i32,
+}
+
 /// Information need to show a sheet tab in the UI
 /// The color is serialized only if it is not Color::None
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
