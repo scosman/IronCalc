@@ -396,6 +396,43 @@ fn test_exporting_merged_cells() {
     fs::remove_file(temp_file_name).unwrap();
 }
 
+// Builds a workbook, creates a merge through the new `UserModel::merge_cells`
+// API, exports it to xlsx, re-imports, and asserts the merge survives the
+// round-trip both as the stored A1 range and through the typed query API.
+#[test]
+fn test_merge_cells_xlsx_round_trip() {
+    let temp_file_name = "temp_file_test_merge_cells_round_trip.xlsx";
+
+    let mut model = UserModel::new_empty("merge_model", "en", "UTC", "en").unwrap();
+    model.set_user_input(0, 2, 2, "anchor").unwrap();
+    // Merge B2:D3 (anchor B2, spanning 3 columns and 2 rows).
+    model.merge_cells(0, 2, 2, 3, 2).unwrap();
+    let expected_regions = model.get_merge_cells(0).unwrap();
+    assert_eq!(expected_regions.len(), 1);
+
+    save_to_xlsx(model.get_model(), temp_file_name).unwrap();
+
+    let reimported = load_from_xlsx(temp_file_name, "en", "UTC", "en").unwrap();
+    fs::remove_file(temp_file_name).unwrap();
+
+    // The stored A1 range survived export/import.
+    let stored = reimported
+        .workbook
+        .worksheets
+        .first()
+        .unwrap()
+        .merge_cells
+        .clone();
+    assert_eq!(stored, vec!["B2:D3".to_string()]);
+
+    // And the typed API on the re-imported workbook reports the same region.
+    let reimported_user = UserModel::from_model(reimported);
+    assert_eq!(
+        reimported_user.get_merge_cells(0).unwrap(),
+        expected_regions
+    );
+}
+
 #[test]
 fn test_user_model() {
     let temp_file_name = "temp_file_test_user_model.xlsx";

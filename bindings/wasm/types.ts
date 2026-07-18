@@ -143,6 +143,18 @@ export interface WorksheetProperties {
 }
 
 /**
+ * A normalized, index-based view of a merged region.
+ * The anchor (top-left) cell is `(row, column)`; the region spans `width`
+ * columns and `height` rows (both >= 1).
+ */
+export interface MergeCell {
+  row: number;
+  column: number;
+  width: number;
+  height: number;
+}
+
+/**
  * A cell color value. Matches the Rust `Color` enum serialized with `#[serde(untagged)]`:
  * - `string`           → `Color::Rgb("#RRGGBB")`
  * - `[number, number]` → `Color::Theme(index, tint)`

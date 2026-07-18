@@ -30,7 +30,7 @@ exact file:line targets.
   guard mirroring the array-formula guard. One test per displacement case, each
   with undo/redo; row/column symmetry.
 
-- [ ] **Phase 4 — Bindings + round-trip.** Expose the four methods in the wasm,
+- [x] **Phase 4 — Bindings + round-trip.** Expose the four methods in the wasm,
   python, and nodejs bindings; `MergeCell[]` serialization for JS; verify the
   existing xlsx round-trip test and add an import→merge-via-API→export→re-import
   case; note the Phase-2 clipboard limitation in docs.

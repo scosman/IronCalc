@@ -1,7 +1,7 @@
 use pyo3::exceptions::PyException;
 use pyo3::{create_exception, prelude::*, wrap_pyfunction};
 
-use types::{PyCellType, PySheetProperty, PyStyle};
+use types::{PyCellType, PyMergeCell, PySheetProperty, PyStyle};
 use xlsx::base::expressions::types::Area;
 use xlsx::base::types::{Color, Style, Workbook};
 use xlsx::base::{Model, UserModel};
@@ -81,6 +81,52 @@ impl PyUserModel {
             dimension.min_column,
             dimension.max_column,
         ))
+    }
+
+    /// Merges the rectangle anchored at `(row, column)` spanning `width` columns
+    /// and `height` rows, keeping only the anchor value and clearing the covered
+    /// cells' content. Undoable as a single history entry.
+    pub fn merge_cells(
+        &mut self,
+        sheet: u32,
+        row: i32,
+        column: i32,
+        width: i32,
+        height: i32,
+    ) -> PyResult<()> {
+        self.model
+            .merge_cells(sheet, row, column, width, height)
+            .map_err(|e| WorkbookError::new_err(e.to_string()))
+    }
+
+    /// Removes the merged region containing `(row, column)` (anchor or covered
+    /// cell). A no-op if the cell is not merged. Undoable/redoable.
+    pub fn unmerge_cells(&mut self, sheet: u32, row: i32, column: i32) -> PyResult<()> {
+        self.model
+            .unmerge_cells(sheet, row, column)
+            .map_err(|e| WorkbookError::new_err(e.to_string()))
+    }
+
+    /// Returns every merged region on `sheet`.
+    pub fn get_merge_cells(&self, sheet: u32) -> PyResult<Vec<PyMergeCell>> {
+        self.model
+            .get_merge_cells(sheet)
+            .map(|regions| regions.into_iter().map(PyMergeCell::from).collect())
+            .map_err(|e| WorkbookError::new_err(e.to_string()))
+    }
+
+    /// Returns the merged region covering `(row, column)` (anchor or covered), or
+    /// `None` if the cell is not merged.
+    pub fn get_merge_cell(
+        &self,
+        sheet: u32,
+        row: i32,
+        column: i32,
+    ) -> PyResult<Option<PyMergeCell>> {
+        self.model
+            .get_merge_cell(sheet, row, column)
+            .map(|region| region.map(PyMergeCell::from))
+            .map_err(|e| WorkbookError::new_err(e.to_string()))
     }
 
     pub fn to_bytes(&self) -> PyResult<Vec<u8>> {

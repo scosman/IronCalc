@@ -114,4 +114,8 @@ export declare class UserModel {
   deleteDefinedName(name: string, scope?: number | undefined | null): void
   moveColumns(sheet: number, column: number, columnCount: number, delta: number): void
   moveRows(sheet: number, row: number, rowCount: number, delta: number): void
+  mergeCells(sheet: number, row: number, column: number, width: number, height: number): void
+  unmergeCells(sheet: number, row: number, column: number): void
+  getMergeCells(sheet: number): unknown
+  getMergeCell(sheet: number, row: number, column: number): unknown
 }
