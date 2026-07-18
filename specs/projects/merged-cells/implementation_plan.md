@@ -18,7 +18,7 @@ exact file:line targets.
   `Diff::UnmergeCells` (`history.rs`) handled in both undo and redo matches
   (`undo_redo.rs`); unit tests for API, validation, and undo/redo symmetry.
 
-- [ ] **Phase 2 — Edit & clear guards.** Reject writes to covered cells in
+- [x] **Phase 2 — Edit & clear guards.** Reject writes to covered cells in
   `set_user_input` (`common.rs`); unmerge fully-contained regions in
   `range_clear_all` (bundled into its diff list) while leaving
   `range_clear_contents` / `range_clear_formatting` merge-preserving; tests for

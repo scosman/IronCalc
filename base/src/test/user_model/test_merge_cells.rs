@@ -231,3 +231,157 @@ fn validation_invalid_sheet() {
     assert!(model.get_merge_cells(5).is_err());
     assert!(model.get_merge_cell(5, 1, 1).is_err());
 }
+
+fn area(row: i32, column: i32, width: i32, height: i32) -> Area {
+    Area {
+        sheet: 0,
+        row,
+        column,
+        width,
+        height,
+    }
+}
+
+#[test]
+fn edit_covered_cell_rejected() {
+    let mut model = new_empty_user_model();
+    // Merge B2:D4 -> anchor (2, 2).
+    model.merge_cells(0, 2, 2, 3, 3).unwrap();
+
+    // Writing to a covered interior cell is rejected and names the anchor.
+    let err = model.set_user_input(0, 3, 3, "nope").unwrap_err();
+    assert_eq!(
+        err,
+        "cannot edit a cell inside a merged region; edit the anchor at B2"
+    );
+    // A covered cell on the region's edge is rejected too.
+    assert!(model.set_user_input(0, 2, 4, "nope").is_err());
+    assert_eq!(cell(&model, 2, 4), "");
+
+    // The covered cell stays empty and the failed writes recorded no history:
+    // undoing once removes the merge (the only prior operation), leaving nothing
+    // to undo.
+    assert_eq!(cell(&model, 3, 3), "");
+    model.undo().unwrap();
+    assert!(model.get_merge_cells(0).unwrap().is_empty());
+    assert!(!model.can_undo());
+}
+
+#[test]
+fn internal_writers_bypass_edit_guard() {
+    let mut model = new_empty_user_model();
+    // Merge B2:D4 -> covered cells C2/C3/C4 etc. are interior.
+    model.merge_cells(0, 2, 2, 3, 3).unwrap();
+
+    // Undo/redo route through the base `Model::set_user_input`, not the guarded
+    // `UserModel::set_user_input`. A normal edit to a non-merged cell must still
+    // round-trip through history with a merge present.
+    model.set_user_input(0, 1, 6, "free").unwrap(); // F1
+    model.undo().unwrap();
+    assert_eq!(cell(&model, 1, 6), "");
+    model.redo().unwrap();
+    assert_eq!(cell(&model, 1, 6), "free");
+
+    // Autofill also writes through the base writer. Filling a series from C1
+    // downward into C2/C3/C4 (all covered by the merge) must not be rejected by
+    // the covered-cell guard.
+    model.set_user_input(0, 1, 3, "seed").unwrap(); // C1, above the merge
+    model.auto_fill_rows(&area(1, 3, 1, 1), 4).unwrap();
+    assert_eq!(cell(&model, 2, 3), "seed");
+    assert_eq!(cell(&model, 3, 3), "seed");
+    // The merge itself is untouched by these internal writes.
+    assert_eq!(model.get_merge_cells(0).unwrap().len(), 1);
+}
+
+#[test]
+fn edit_anchor_allowed() {
+    let mut model = new_empty_user_model();
+    model.merge_cells(0, 2, 2, 3, 3).unwrap();
+
+    // Writing to the anchor works normally.
+    model.set_user_input(0, 2, 2, "anchor value").unwrap();
+    assert_eq!(cell(&model, 2, 2), "anchor value");
+}
+
+#[test]
+fn edit_unmerged_cell_allowed() {
+    let mut model = new_empty_user_model();
+    // With no merge in play the guard is inert.
+    model.set_user_input(0, 3, 3, "free").unwrap();
+    assert_eq!(cell(&model, 3, 3), "free");
+}
+
+#[test]
+fn clear_all_unmerges_contained_region() {
+    let mut model = new_empty_user_model();
+    model.set_user_input(0, 2, 2, "anchor").unwrap();
+    // Merge B2:C3, fully inside the area we will clear (A1:D4).
+    model.merge_cells(0, 2, 2, 2, 2).unwrap();
+    assert_eq!(model.get_merge_cells(0).unwrap().len(), 1);
+
+    model.range_clear_all(&area(1, 1, 4, 4)).unwrap();
+    // The region is unmerged and the anchor content is cleared.
+    assert!(model.get_merge_cells(0).unwrap().is_empty());
+    assert_eq!(cell(&model, 2, 2), "");
+
+    // A single undo restores both the merge and the anchor content.
+    model.undo().unwrap();
+    assert_eq!(
+        model.get_merge_cells(0).unwrap(),
+        vec![MergeCell {
+            row: 2,
+            column: 2,
+            width: 2,
+            height: 2,
+        }]
+    );
+    assert_eq!(cell(&model, 2, 2), "anchor");
+
+    // Redo clears and unmerges again.
+    model.redo().unwrap();
+    assert!(model.get_merge_cells(0).unwrap().is_empty());
+    assert_eq!(cell(&model, 2, 2), "");
+}
+
+#[test]
+fn clear_all_leaves_partially_overlapped_region() {
+    let mut model = new_empty_user_model();
+    // Merge B2:D4.
+    model.merge_cells(0, 2, 2, 3, 3).unwrap();
+
+    // Clear A1:C3 — overlaps the region but does not fully contain it.
+    model.range_clear_all(&area(1, 1, 3, 3)).unwrap();
+
+    // The region survives intact.
+    assert_eq!(
+        model.get_merge_cells(0).unwrap(),
+        vec![MergeCell {
+            row: 2,
+            column: 2,
+            width: 3,
+            height: 3,
+        }]
+    );
+}
+
+#[test]
+fn clear_contents_preserves_merge() {
+    let mut model = new_empty_user_model();
+    model.set_user_input(0, 2, 2, "anchor").unwrap();
+    model.merge_cells(0, 2, 2, 2, 2).unwrap();
+
+    model.range_clear_contents(&area(1, 1, 4, 4)).unwrap();
+    // Anchor content is cleared but the merge is preserved.
+    assert_eq!(cell(&model, 2, 2), "");
+    assert_eq!(model.get_merge_cells(0).unwrap().len(), 1);
+}
+
+#[test]
+fn clear_formatting_preserves_merge() {
+    let mut model = new_empty_user_model();
+    model.merge_cells(0, 2, 2, 2, 2).unwrap();
+
+    model.range_clear_formatting(&area(1, 1, 4, 4)).unwrap();
+    // Formatting clear never touches merges.
+    assert_eq!(model.get_merge_cells(0).unwrap().len(), 1);
+}

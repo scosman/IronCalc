@@ -10,12 +10,12 @@ use crate::{
     expressions::{
         parser::CompletionContext,
         types::Area,
-        utils::{is_valid_column_number, is_valid_row},
+        utils::{is_valid_column_number, is_valid_row, number_to_column},
     },
     model::{FmtSettings, Model},
     types::{
         Alignment, ArrayKind, BorderItem, Cell, CellType, Col, Color, HorizontalAlignment,
-        SheetProperties, SheetState, Style, Theme, VerticalAlignment,
+        MergeCell, SheetProperties, SheetState, Style, Theme, VerticalAlignment,
     },
 };
 
@@ -67,6 +67,20 @@ fn boolean(value: &str) -> Result<bool, String> {
         "false" => Ok(false),
         _ => Err(format!("Invalid value for boolean: '{value}'.")),
     }
+}
+
+/// Returns true if `region` lies entirely within `area` (every cell of the
+/// merged region is inside the area). A region only partially overlapped by
+/// `area` returns false.
+fn area_contains_region(area: &Area, region: &MergeCell) -> bool {
+    let area_row_end = area.row + area.height - 1;
+    let area_column_end = area.column + area.width - 1;
+    let region_row_end = region.row + region.height - 1;
+    let region_column_end = region.column + region.width - 1;
+    region.row >= area.row
+        && region.column >= area.column
+        && region_row_end <= area_row_end
+        && region_column_end <= area_column_end
 }
 
 fn horizontal(value: &str) -> Result<HorizontalAlignment, String> {
@@ -408,6 +422,20 @@ impl<'a> UserModel<'a> {
         if !is_valid_row(row) {
             return Err("Invalid row".to_string());
         }
+        // A covered (non-anchor) cell of a merged region cannot be edited
+        // directly; only the anchor holds a value. The UI is expected to
+        // redirect the caret to the anchor via `get_merge_cell`. A write to the
+        // anchor itself falls through and behaves normally.
+        if let Some(region) = self.model.workbook.worksheet(sheet)?.merge_at(row, column) {
+            if region.row != row || region.column != column {
+                let anchor = number_to_column(region.column)
+                    .map(|col| format!("{col}{}", region.row))
+                    .unwrap_or_default();
+                return Err(format!(
+                    "cannot edit a cell inside a merged region; edit the anchor at {anchor}"
+                ));
+            }
+        }
         let old_value = self
             .model
             .workbook
@@ -677,7 +705,7 @@ impl<'a> UserModel<'a> {
             old_style.push(style_row);
         }
         self.model.range_clear_all(range)?;
-        let diff_list = vec![Diff::RangeClearAll {
+        let mut diff_list = vec![Diff::RangeClearAll {
             sheet,
             row: range.row,
             column: range.column,
@@ -686,6 +714,33 @@ impl<'a> UserModel<'a> {
             old_value,
             old_style,
         }];
+
+        // Excel's "Clear All" unmerges. Any region fully contained in the
+        // cleared area is removed, recorded as an `UnmergeCells` diff bundled
+        // into this same list so a single undo restores both the cleared
+        // content and the merge. A region only partially overlapped is left
+        // intact (its anchor content still clears if the anchor is in `range`).
+        let contained: Vec<MergeCell> = self
+            .model
+            .workbook
+            .worksheet(sheet)?
+            .merge_cells_parsed()
+            .into_iter()
+            .filter(|region| area_contains_region(range, region))
+            .collect();
+        for region in contained {
+            self.model
+                .workbook
+                .worksheet_mut(sheet)?
+                .remove_merge_at(region.row, region.column);
+            diff_list.push(Diff::UnmergeCells {
+                sheet,
+                row: region.row,
+                column: region.column,
+                width: region.width,
+                height: region.height,
+            });
+        }
 
         self.push_diff_list(diff_list);
         self.evaluate_if_not_paused();
