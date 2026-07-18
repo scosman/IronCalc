@@ -24,7 +24,7 @@ exact file:line targets.
   `range_clear_contents` / `range_clear_formatting` merge-preserving; tests for
   both guards including undo.
 
-- [ ] **Phase 3 — Displacement.** `displace_merge_cells` (`actions.rs`) wired
+- [x] **Phase 3 — Displacement.** `displace_merge_cells` (`actions.rs`) wired
   into all six sites (insert/delete/move × rows/columns) beside the existing CF
   displacement; grow/shift/shrink/drop rules; drop-on-collapse-to-1×1; move-split
   guard mirroring the array-formula guard. One test per displacement case, each

@@ -1046,6 +1046,9 @@ impl<'a> UserModel<'a> {
     /// See also [`Model::delete_rows`].
     pub fn delete_rows(&mut self, sheet: u32, row: i32, row_count: i32) -> Result<(), String> {
         let worksheet = self.model.workbook.worksheet(sheet)?;
+        // Snapshot the merge list so undo can restore regions the deletion
+        // shrinks or drops (re-running `insert_rows` cannot reverse those).
+        let old_merge_cells = worksheet.merge_cells.clone();
         let mut old_data = Vec::new();
         // Collect data for all rows to be deleted
         for r in row..row + row_count {
@@ -1085,6 +1088,7 @@ impl<'a> UserModel<'a> {
             row,
             count: row_count,
             old_data,
+            old_merge_cells,
         }];
         self.push_diff_list(diff_list);
         self.evaluate_if_not_paused();
@@ -1105,6 +1109,9 @@ impl<'a> UserModel<'a> {
         column_count: i32,
     ) -> Result<(), String> {
         let worksheet = self.model.workbook.worksheet(sheet)?;
+        // Snapshot the merge list so undo can restore regions the deletion
+        // shrinks or drops (re-running `insert_columns` cannot reverse those).
+        let old_merge_cells = worksheet.merge_cells.clone();
         let mut old_data = Vec::new();
         // Collect data for all columns to be deleted
         for c in column..column + column_count {
@@ -1150,6 +1157,7 @@ impl<'a> UserModel<'a> {
             column,
             count: column_count,
             old_data,
+            old_merge_cells,
         }];
         self.push_diff_list(diff_list);
         self.evaluate_if_not_paused();

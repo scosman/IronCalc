@@ -8,7 +8,8 @@ use crate::expressions::parser::Parser as ExprParser;
 use crate::expressions::types::CellReferenceRC;
 use crate::expressions::utils;
 use crate::model::{CellStructure, Model};
-use crate::types::{ArrayKind, Cell};
+use crate::types::{ArrayKind, Cell, MergeCell};
+use crate::worksheet::merge_cell_to_a1;
 
 /// Returns the new row after displacement, or `None` if the row was deleted.
 fn displace_cf_row(row: i32, data: &DisplaceData, sheet: u32) -> Option<i32> {
@@ -81,6 +82,143 @@ fn displace_cf_col(col: i32, data: &DisplaceData, sheet: u32) -> Option<i32> {
             }
         }
         _ => Some(col),
+    }
+}
+
+/// Moves a single grid line (a row or a column index) under a `RowMove`/
+/// `ColumnMove`: the moved line jumps by `delta`, the lines it passes over shift
+/// one step to fill the gap, everything else is unchanged. Same rule the move
+/// arms of [`displace_cf_row`]/[`displace_cf_col`] apply to a reference.
+fn move_line(line: i32, moved: i32, delta: i32) -> i32 {
+    if line == moved {
+        line + delta
+    } else if delta > 0 && line > moved && line <= moved + delta {
+        line - 1
+    } else if delta < 0 && line < moved && line >= moved + delta {
+        line + 1
+    } else {
+        line
+    }
+}
+
+/// Displaces one axis of a merged region spanning `[start, start + len - 1]`
+/// under an insert (`delta > 0`, `delta` lines added at `p`) or a delete
+/// (`delta < 0`, `-delta` lines removed starting at `p`).
+///
+/// Returns the new `(start, len)` for the axis, or `None` if the deletion
+/// removes the region entirely on this axis. Insert never splits: it shifts the
+/// region (`p` at/above the top) or grows it (`p` strictly inside). Delete
+/// shifts (band entirely above), leaves it (band entirely below), or shrinks it
+/// (overlap), never splitting.
+fn displace_delete_insert_span(start: i32, len: i32, p: i32, delta: i32) -> Option<(i32, i32)> {
+    let end = start + len - 1;
+    if delta >= 0 {
+        // Insert `delta` lines at `p`.
+        if p <= start {
+            Some((start + delta, len)) // shift
+        } else if p <= end {
+            Some((start, len + delta)) // grow (p strictly inside the region)
+        } else {
+            Some((start, len)) // inserted below the region
+        }
+    } else {
+        // Delete the band `[p, p + n - 1]`.
+        let n = -delta;
+        let band_end = p + n - 1;
+        if p > end {
+            Some((start, len)) // band entirely below the region
+        } else if band_end < start {
+            Some((start - n, len)) // band entirely above -> shift up
+        } else {
+            // Overlap: drop the intersecting lines, collapse toward the top.
+            let overlap = band_end.min(end) - p.max(start) + 1;
+            let new_len = len - overlap;
+            if new_len <= 0 {
+                None // region fully deleted
+            } else {
+                Some((start.min(p), new_len))
+            }
+        }
+    }
+}
+
+/// Drops a region that a deletion collapsed to a degenerate 1x1 (a 1x1 merge is
+/// meaningless), otherwise keeps it. Valid regions are never 1x1 to begin with,
+/// so this only ever fires on a genuine collapse.
+fn finish_span(region: MergeCell) -> Option<MergeCell> {
+    if region.width == 1 && region.height == 1 {
+        None
+    } else {
+        Some(region)
+    }
+}
+
+/// Applies a structural displacement to a single merged region, returning its
+/// new geometry or `None` if it is dropped (fully deleted, or collapsed to 1x1
+/// by a deletion).
+///
+/// Insert/delete transform the affected axis via [`displace_delete_insert_span`]
+/// and never split. A move displaces both edges independently via [`move_line`];
+/// callers guarantee (via the move-split guard) that a move reaching here shifts
+/// the whole region intact, so a move never drops a region.
+fn displace_merged_region(m: &MergeCell, data: &DisplaceData, sheet: u32) -> Option<MergeCell> {
+    match data {
+        DisplaceData::Row {
+            sheet: s,
+            row,
+            delta,
+        } if *s == sheet => {
+            let (new_row, new_height) = displace_delete_insert_span(m.row, m.height, *row, *delta)?;
+            finish_span(MergeCell {
+                row: new_row,
+                column: m.column,
+                width: m.width,
+                height: new_height,
+            })
+        }
+        DisplaceData::Column {
+            sheet: s,
+            column,
+            delta,
+        } if *s == sheet => {
+            let (new_column, new_width) =
+                displace_delete_insert_span(m.column, m.width, *column, *delta)?;
+            finish_span(MergeCell {
+                row: m.row,
+                column: new_column,
+                width: new_width,
+                height: m.height,
+            })
+        }
+        DisplaceData::RowMove {
+            sheet: s,
+            row,
+            delta,
+        } if *s == sheet => {
+            let a = move_line(m.row, *row, *delta);
+            let b = move_line(m.row + m.height - 1, *row, *delta);
+            Some(MergeCell {
+                row: a.min(b),
+                column: m.column,
+                width: m.width,
+                height: (a - b).abs() + 1,
+            })
+        }
+        DisplaceData::ColumnMove {
+            sheet: s,
+            column,
+            delta,
+        } if *s == sheet => {
+            let a = move_line(m.column, *column, *delta);
+            let b = move_line(m.column + m.width - 1, *column, *delta);
+            Some(MergeCell {
+                row: m.row,
+                column: a.min(b),
+                width: (a - b).abs() + 1,
+                height: m.height,
+            })
+        }
+        _ => Some(m.clone()),
     }
 }
 
@@ -335,6 +473,35 @@ impl<'a> Model<'a> {
         }
     }
 
+    /// Displaces every merged region on `sheet` according to `displace_data`,
+    /// mirroring [`Model::displace_cf_ranges`]. Regions grow/shift/shrink with the
+    /// grid; a region removed entirely or collapsed to 1x1 by a deletion is
+    /// dropped. Moves that would split a region are rejected earlier (see the
+    /// merge move-split guard), so a move here only ever shifts a whole region.
+    fn displace_merge_cells(&mut self, sheet: u32, displace_data: &DisplaceData) {
+        let merges = match self.workbook.worksheets.get(sheet as usize) {
+            Some(ws) => ws.merge_cells_parsed(),
+            None => return,
+        };
+        let mut new_ranges = Vec::with_capacity(merges.len());
+        for region in &merges {
+            if let Some(displaced) = displace_merged_region(region, displace_data, sheet) {
+                // If a displaced corner falls out of the valid grid range,
+                // `merge_cell_to_a1` returns `None` and the region is dropped. This
+                // is intentional and consistent with the crate's "skip unparseable
+                // range" philosophy; it cannot happen for an in-bounds edit anyway,
+                // since insert checks the grid limit and delete/move only stay
+                // within or below the current bounds.
+                if let Some(range) = merge_cell_to_a1(&displaced) {
+                    new_ranges.push(range);
+                }
+            }
+        }
+        if let Some(ws) = self.workbook.worksheets.get_mut(sheet as usize) {
+            ws.merge_cells = new_ranges;
+        }
+    }
+
     /// Retrieves the column indices for a specific row in a given sheet, sorted in ascending or descending order.
     ///
     /// # Arguments
@@ -522,6 +689,7 @@ impl<'a> Model<'a> {
         };
         self.displace_cells(&disp)?;
         self.displace_cf_ranges(sheet, &disp);
+        self.displace_merge_cells(sheet, &disp);
 
         // In the list of columns:
         // * Keep all the columns to the left
@@ -613,6 +781,7 @@ impl<'a> Model<'a> {
         };
         self.displace_cells(&disp)?;
         self.displace_cf_ranges(sheet, &disp);
+        self.displace_merge_cells(sheet, &disp);
         let worksheet = &mut self.workbook.worksheet_mut(sheet)?;
 
         // deletes all the column styles
@@ -856,6 +1025,7 @@ impl<'a> Model<'a> {
         };
         self.displace_cells(&disp)?;
         self.displace_cf_ranges(sheet, &disp);
+        self.displace_merge_cells(sheet, &disp);
 
         Ok(())
     }
@@ -925,6 +1095,7 @@ impl<'a> Model<'a> {
         };
         self.displace_cells(&disp)?;
         self.displace_cf_ranges(sheet, &disp);
+        self.displace_merge_cells(sheet, &disp);
         Ok(())
     }
 
@@ -1049,6 +1220,7 @@ impl<'a> Model<'a> {
         };
         self.displace_cells(&disp)?;
         self.displace_cf_ranges(sheet, &disp);
+        self.displace_merge_cells(sheet, &disp);
         Ok(())
     }
 
@@ -1163,6 +1335,7 @@ impl<'a> Model<'a> {
         let disp = DisplaceData::RowMove { sheet, row, delta };
         self.displace_cells(&disp)?;
         self.displace_cf_ranges(sheet, &disp);
+        self.displace_merge_cells(sheet, &disp);
         Ok(())
     }
 
@@ -1235,6 +1408,57 @@ impl<'a> Model<'a> {
                     }
                 }
                 _ => {}
+            }
+        }
+
+        Ok(true)
+    }
+
+    // Returns true if moving columns [column, column+column_count-1] by delta would
+    // not split any merged region. A region is safe if its column span is fully
+    // within the moved group, fully within the displaced zone, or fully outside
+    // both — exactly the test `can_move_columns_action` uses for array formulas.
+    fn can_move_columns_merge(
+        &self,
+        sheet: u32,
+        column: i32,
+        column_count: i32,
+        delta: i32,
+    ) -> Result<bool, String> {
+        if delta == 0 {
+            return Ok(true);
+        }
+
+        let group_start = column;
+        let group_end = column + column_count - 1;
+
+        let (displace_start, displace_end) = if delta > 0 {
+            (group_end + 1, group_end + delta)
+        } else {
+            (group_start + delta, group_start - 1)
+        };
+
+        let overlaps = |a_start: i32, a_end: i32, b_start: i32, b_end: i32| {
+            a_start <= b_end && b_start <= a_end
+        };
+
+        let contains = |a_start: i32, a_end: i32, b_start: i32, b_end: i32| {
+            a_start <= b_start && b_end <= a_end
+        };
+
+        let interval_is_safe = |region_start: i32, region_end: i32| {
+            let safe_for = |start: i32, end: i32| {
+                !overlaps(start, end, region_start, region_end)
+                    || contains(start, end, region_start, region_end)
+            };
+            safe_for(group_start, group_end) && safe_for(displace_start, displace_end)
+        };
+
+        for m in self.workbook.worksheet(sheet)?.merge_cells_parsed() {
+            let region_start = m.column;
+            let region_end = m.column + m.width - 1;
+            if !interval_is_safe(region_start, region_end) {
+                return Ok(false);
             }
         }
 
@@ -1320,6 +1544,56 @@ impl<'a> Model<'a> {
         Ok(true)
     }
 
+    // Returns true if moving rows [row, row+row_count-1] by delta would not split
+    // any merged region. Mirrors `can_move_rows_action`, testing each region's row
+    // span instead of an array formula's.
+    fn can_move_rows_merge(
+        &self,
+        sheet: u32,
+        row: i32,
+        row_count: i32,
+        delta: i32,
+    ) -> Result<bool, String> {
+        if delta == 0 {
+            return Ok(true);
+        }
+
+        let group_start = row;
+        let group_end = row + row_count - 1;
+
+        let (displace_start, displace_end) = if delta > 0 {
+            (group_end + 1, group_end + delta)
+        } else {
+            (group_start + delta, group_start - 1)
+        };
+
+        let overlaps = |a_start: i32, a_end: i32, b_start: i32, b_end: i32| {
+            a_start <= b_end && b_start <= a_end
+        };
+
+        let contains = |a_start: i32, a_end: i32, b_start: i32, b_end: i32| {
+            a_start <= b_start && b_end <= a_end
+        };
+
+        let interval_is_safe = |region_start: i32, region_end: i32| {
+            let safe_for = |start: i32, end: i32| {
+                !overlaps(start, end, region_start, region_end)
+                    || contains(start, end, region_start, region_end)
+            };
+            safe_for(group_start, group_end) && safe_for(displace_start, displace_end)
+        };
+
+        for m in self.workbook.worksheet(sheet)?.merge_cells_parsed() {
+            let region_start = m.row;
+            let region_end = m.row + m.height - 1;
+            if !interval_is_safe(region_start, region_end) {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
+    }
+
     /// Moves a group of columns [column, column+column_count-1] by delta positions.
     /// CSE array formulas fully within the moved group are preserved as arrays.
     /// Displaces cells due to a move column action
@@ -1358,6 +1632,9 @@ impl<'a> Model<'a> {
             return Err(
                 "Cannot move columns because that would split an array formula".to_string(),
             );
+        }
+        if !self.can_move_columns_merge(sheet, column, column_count, delta)? {
+            return Err("Cannot move columns because that would split a merged cell".to_string());
         }
         self.reset_dynamic_array_spills(sheet)?;
 
@@ -1401,6 +1678,9 @@ impl<'a> Model<'a> {
         }
         if !self.can_move_rows_action(sheet, row, row_count, delta)? {
             return Err("Cannot move rows because that would split an array formula".to_string());
+        }
+        if !self.can_move_rows_merge(sheet, row, row_count, delta)? {
+            return Err("Cannot move rows because that would split a merged cell".to_string());
         }
         self.reset_dynamic_array_spills(sheet)?;
 

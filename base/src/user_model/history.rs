@@ -134,6 +134,10 @@ pub(crate) enum Diff {
         row: i32,
         count: i32,
         old_data: Vec<RowData>,
+        // The sheet's merge list before the deletion. A deletion can shrink or
+        // drop a region, which re-running `insert_rows` on undo cannot reverse,
+        // so undo restores this snapshot wholesale (redo re-runs `delete_rows`).
+        old_merge_cells: Vec<String>,
     },
     InsertColumns {
         sheet: u32,
@@ -145,6 +149,8 @@ pub(crate) enum Diff {
         column: i32,
         count: i32,
         old_data: Vec<ColumnData>,
+        // The sheet's merge list before the deletion; see `DeleteRows`.
+        old_merge_cells: Vec<String>,
     },
     DeleteSheet {
         sheet: u32,

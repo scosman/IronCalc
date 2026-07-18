@@ -247,6 +247,7 @@ impl<'a> UserModel<'a> {
                     row,
                     count: _,
                     old_data,
+                    old_merge_cells,
                 } => {
                     needs_evaluation = true;
                     self.model
@@ -259,6 +260,9 @@ impl<'a> UserModel<'a> {
                         }
                         worksheet.sheet_data.insert(r, row_data.data.clone());
                     }
+                    // Restore the pre-deletion merge list; the re-insert above may
+                    // have grown a region that the deletion had shrunk.
+                    worksheet.merge_cells = old_merge_cells.clone();
                 }
                 Diff::InsertColumns {
                     sheet,
@@ -273,6 +277,7 @@ impl<'a> UserModel<'a> {
                     column,
                     count: _,
                     old_data,
+                    old_merge_cells,
                 } => {
                     needs_evaluation = true;
                     self.model
@@ -290,6 +295,8 @@ impl<'a> UserModel<'a> {
                             worksheet.set_column_width_and_style(c, width, hidden, style)?;
                         }
                     }
+                    // Restore the pre-deletion merge list; see `DeleteRows`.
+                    worksheet.merge_cells = old_merge_cells.clone();
                 }
                 Diff::SetFrozenRowsCount {
                     sheet,
@@ -800,6 +807,7 @@ impl<'a> UserModel<'a> {
                     row,
                     count,
                     old_data: _,
+                    old_merge_cells: _,
                 } => {
                     self.model.delete_rows(*sheet, *row, *count)?;
                     needs_evaluation = true;
@@ -817,6 +825,7 @@ impl<'a> UserModel<'a> {
                     column,
                     count,
                     old_data: _,
+                    old_merge_cells: _,
                 } => {
                     self.model.delete_columns(*sheet, *column, *count)?;
                     needs_evaluation = true;
