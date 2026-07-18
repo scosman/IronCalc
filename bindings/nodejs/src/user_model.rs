@@ -696,4 +696,52 @@ impl UserModel {
       .move_rows_action(sheet, row, row_count, delta)
       .map_err(to_js_error)
   }
+
+  #[napi(js_name = "mergeCells")]
+  pub fn merge_cells(
+    &mut self,
+    sheet: u32,
+    row: i32,
+    column: i32,
+    width: i32,
+    height: i32,
+  ) -> Result<()> {
+    self
+      .model
+      .merge_cells(sheet, row, column, width, height)
+      .map_err(to_js_error)
+  }
+
+  #[napi(js_name = "unmergeCells")]
+  pub fn unmerge_cells(&mut self, sheet: u32, row: i32, column: i32) -> Result<()> {
+    self
+      .model
+      .unmerge_cells(sheet, row, column)
+      .map_err(to_js_error)
+  }
+
+  #[napi(js_name = "getMergeCells")]
+  pub fn get_merge_cells(&'_ self, env: Env, sheet: u32) -> Result<Unknown<'_>> {
+    let list = self.model.get_merge_cells(sheet).map_err(to_js_error)?;
+    env
+      .to_js_value(&list)
+      .map_err(|e| to_js_error(e.to_string()))
+  }
+
+  #[napi(js_name = "getMergeCell")]
+  pub fn get_merge_cell(
+    &'_ self,
+    env: Env,
+    sheet: u32,
+    row: i32,
+    column: i32,
+  ) -> Result<Unknown<'_>> {
+    let region = self
+      .model
+      .get_merge_cell(sheet, row, column)
+      .map_err(to_js_error)?;
+    env
+      .to_js_value(&region)
+      .map_err(|e| to_js_error(e.to_string()))
+  }
 }

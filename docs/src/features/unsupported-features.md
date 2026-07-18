@@ -24,6 +24,10 @@ IronCalc does not yet offer formula suggestions while typing. The planned functi
 
 Pivot Tables are highly customizable summary tables that let you reorganize and aggregate data in flexible ways. Support for them is planned for a future release.
 
+## **Merged cells through copy & paste** <Badge type="info" text="Planned" />
+
+Merged cells are fully supported by the model API (create, query, and unmerge, and they survive xlsx import/export), but the clipboard does not yet carry merge information. Copying a merged region and pasting it elsewhere pastes only the cell values and styles; it does not reproduce the merge, and pasting over an existing merge does not unmerge it. Carrying merge fidelity through copy & paste is planned for a future release.
+
 ::: info
 More planned features can be found in our [roadmap](https://www.ironcalc.com/roadmap.html).
 :::

@@ -1153,6 +1153,46 @@ impl Model {
             .map_err(|e| to_js_error(e.to_string()))
     }
 
+    // -----------------------------------------------------------------------
+    // Merged cells
+    // -----------------------------------------------------------------------
+
+    #[wasm_bindgen(js_name = "mergeCells")]
+    pub fn merge_cells(
+        &mut self,
+        sheet: u32,
+        row: i32,
+        column: i32,
+        width: i32,
+        height: i32,
+    ) -> Result<(), JsError> {
+        self.model
+            .merge_cells(sheet, row, column, width, height)
+            .map_err(to_js_error)
+    }
+
+    #[wasm_bindgen(js_name = "unmergeCells")]
+    pub fn unmerge_cells(&mut self, sheet: u32, row: i32, column: i32) -> Result<(), JsError> {
+        self.model
+            .unmerge_cells(sheet, row, column)
+            .map_err(to_js_error)
+    }
+
+    #[wasm_bindgen(js_name = "getMergeCells", unchecked_return_type = "MergeCell[]")]
+    pub fn get_merge_cells(&self, sheet: u32) -> Result<JsValue, JsError> {
+        let list = self.model.get_merge_cells(sheet).map_err(to_js_error)?;
+        serde_wasm_bindgen::to_value(&list).map_err(|e| to_js_error(e.to_string()))
+    }
+
+    #[wasm_bindgen(js_name = "getMergeCell", unchecked_return_type = "MergeCell | null")]
+    pub fn get_merge_cell(&self, sheet: u32, row: i32, column: i32) -> Result<JsValue, JsError> {
+        let region = self
+            .model
+            .get_merge_cell(sheet, row, column)
+            .map_err(to_js_error)?;
+        serde_wasm_bindgen::to_value(&region).map_err(|e| to_js_error(e.to_string()))
+    }
+
     // Named styles
 
     #[wasm_bindgen(js_name = "getNamedStyleList", unchecked_return_type = "string[]")]

@@ -53,6 +53,7 @@ mod constants;
 mod cut_paste;
 mod functions;
 mod implicit_intersection;
+mod merge_cells;
 mod model;
 mod styles;
 mod tz;

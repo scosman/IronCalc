@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 use xlsx::base::types::{
     Alignment, Border, BorderItem, BorderStyle, CellType, Color, Fill, Font, FontScheme,
-    HorizontalAlignment, Style, VerticalAlignment,
+    HorizontalAlignment, MergeCell, Style, VerticalAlignment,
 };
 
 fn color_to_string(c: Color) -> Option<String> {
@@ -35,6 +35,32 @@ pub struct Cell {
     pub row: i32,
     #[pyo3(get, set)]
     pub column: i32,
+}
+
+/// A normalized, index-based view of a merged region. The anchor (top-left)
+/// cell is `(row, column)`; the region spans `width` columns and `height` rows.
+#[pyclass]
+#[derive(Clone)]
+pub struct PyMergeCell {
+    #[pyo3(get)]
+    pub row: i32,
+    #[pyo3(get)]
+    pub column: i32,
+    #[pyo3(get)]
+    pub width: i32,
+    #[pyo3(get)]
+    pub height: i32,
+}
+
+impl From<MergeCell> for PyMergeCell {
+    fn from(merge_cell: MergeCell) -> Self {
+        PyMergeCell {
+            row: merge_cell.row,
+            column: merge_cell.column,
+            width: merge_cell.width,
+            height: merge_cell.height,
+        }
+    }
 }
 
 #[pyclass(eq, eq_int)]
