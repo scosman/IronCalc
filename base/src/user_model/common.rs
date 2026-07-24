@@ -1206,6 +1206,9 @@ impl<'a> UserModel<'a> {
             });
         }
 
+        // Snapshot the frozen-rows count before the delete shrinks it, so undo can restore it.
+        let old_frozen_rows = self.model.workbook.worksheet(sheet)?.frozen_rows;
+
         self.model.delete_rows(sheet, row, row_count)?;
 
         let diff_list = vec![Diff::DeleteRows {
@@ -1214,6 +1217,7 @@ impl<'a> UserModel<'a> {
             count: row_count,
             old_data,
             old_merge_cells,
+            old_frozen_rows,
         }];
         self.push_diff_list(diff_list);
         self.evaluate_if_not_paused();
@@ -1275,6 +1279,9 @@ impl<'a> UserModel<'a> {
             });
         }
 
+        // Snapshot the frozen-columns count before the delete shrinks it, so undo can restore it.
+        let old_frozen_columns = self.model.workbook.worksheet(sheet)?.frozen_columns;
+
         self.model.delete_columns(sheet, column, column_count)?;
 
         let diff_list = vec![Diff::DeleteColumns {
@@ -1283,6 +1290,7 @@ impl<'a> UserModel<'a> {
             count: column_count,
             old_data,
             old_merge_cells,
+            old_frozen_columns,
         }];
         self.push_diff_list(diff_list);
         self.evaluate_if_not_paused();

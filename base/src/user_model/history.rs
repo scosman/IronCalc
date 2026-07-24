@@ -138,6 +138,9 @@ pub(crate) enum Diff {
         // drop a region, which re-running `insert_rows` on undo cannot reverse,
         // so undo restores this snapshot wholesale (redo re-runs `delete_rows`).
         old_merge_cells: Vec<String>,
+        // Frozen-rows count before the delete. Undo re-inserts the rows via `insert_rows`, which
+        // can only regrow the frozen band partially, so the pre-delete count is restored directly.
+        old_frozen_rows: i32,
     },
     InsertColumns {
         sheet: u32,
@@ -151,6 +154,8 @@ pub(crate) enum Diff {
         old_data: Vec<ColumnData>,
         // The sheet's merge list before the deletion; see `DeleteRows`.
         old_merge_cells: Vec<String>,
+        // Frozen-columns count before the delete (see `DeleteRows::old_frozen_rows`).
+        old_frozen_columns: i32,
     },
     DeleteSheet {
         sheet: u32,
