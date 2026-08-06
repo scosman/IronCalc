@@ -1160,7 +1160,7 @@ impl UserModel {
   }
 
   /// Returns every merged region on `sheet`
-  #[napi]
+  #[napi(ts_return_type = "Array<MergeCell>")]
   pub fn get_merge_cells(&'_ self, env: Env, sheet: u32) -> Result<Unknown<'_>> {
     let list = self.model.get_merge_cells(sheet).map_err(to_js_error)?;
     env
@@ -1170,7 +1170,7 @@ impl UserModel {
 
   /// Returns the merged region covering `(row, column)` (anchor or covered), or
   /// `null` if the cell is not merged
-  #[napi]
+  #[napi(ts_return_type = "MergeCell | null")]
   pub fn get_merge_cell(
     &'_ self,
     env: Env,

@@ -113,6 +113,18 @@ export interface WorksheetProperties {
   state: string;
 }
 
+/**
+ * A normalized, index-based view of a merged region.
+ * The anchor (top-left) cell is `(row, column)`; the region spans `width`
+ * columns and `height` rows (both >= 1).
+ */
+export interface MergeCell {
+  row: number;
+  column: number;
+  width: number;
+  height: number;
+}
+
 export type CellArrayStructure =
   | "SingleCell"
   | { DynamicChild: [number, number, number, number] }
@@ -795,12 +807,12 @@ export declare class UserModel {
    */
   unmergeCells(sheet: number, row: number, column: number): void
   /** Returns every merged region on `sheet` */
-  getMergeCells(sheet: number): unknown
+  getMergeCells(sheet: number): Array<MergeCell>
   /**
    * Returns the merged region covering `(row, column)` (anchor or covered), or
    * `null` if the cell is not merged
    */
-  getMergeCell(sheet: number, row: number, column: number): unknown
+  getMergeCell(sheet: number, row: number, column: number): MergeCell | null
 }
 
 /** The type of the content of a cell, following Excel's TYPE() convention. */

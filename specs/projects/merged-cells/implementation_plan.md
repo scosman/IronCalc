@@ -39,3 +39,20 @@ exact file:line targets.
 
 - Clipboard merge fidelity (copy/paste of regions).
 - Any UI (rendering, selection, navigation, menus) — consumer-owned.
+
+## Known gap — `set_user_inputs` bypasses the Phase-2 covered-cell guard
+
+Recorded 2026-08-06 during the upstream sync; **pre-existing, not introduced by it.**
+
+`UserModel::set_user_input` rejects a write to a covered (non-anchor) cell of a merged
+region (`user_model/common.rs`, Phase 2 guard). The batched
+`UserModel::set_user_inputs` — added independently on `fix/batch-set-inputs`, so the two
+never met in review — validates only sheet/row/column and has no equivalent check. A
+batch write (e.g. find-and-replace) can therefore land a value in a covered cell that the
+interactive path refuses, leaving a value the UI never shows.
+
+The two features were built in separate branches and are both headed upstream as separate
+PRs, so whichever lands second should carry the guard: hoist the covered-cell check out of
+`set_user_input` into a shared helper and run it in `set_user_inputs`' up-front validation
+loop, so the batch stays all-or-nothing. Not fixed during the sync to keep that change a
+pure merge.

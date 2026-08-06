@@ -113,6 +113,18 @@ export interface WorksheetProperties {
   state: string;
 }
 
+/**
+ * A normalized, index-based view of a merged region.
+ * The anchor (top-left) cell is `(row, column)`; the region spans `width`
+ * columns and `height` rows (both >= 1).
+ */
+export interface MergeCell {
+  row: number;
+  column: number;
+  width: number;
+  height: number;
+}
+
 export type CellArrayStructure =
   | "SingleCell"
   | { DynamicChild: [number, number, number, number] }
