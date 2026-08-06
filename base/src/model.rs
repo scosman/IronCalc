@@ -770,10 +770,7 @@ impl<'a> Model<'a> {
             }
             ErrorKind(kind) => CalcResult::new_error(kind.clone(), cell, "".to_string()),
             ParseErrorKind {
-                formula,
-                message,
-                position: _,
-                ..
+                formula, message, ..
             } => CalcResult::new_error(
                 Error::ERROR,
                 cell,
@@ -3813,7 +3810,7 @@ impl<'a> Model<'a> {
     pub fn set_timezone(&mut self, timezone: &str) -> Result<(), String> {
         let tz = match Tz::parse(timezone) {
             Ok(tz) => tz,
-            Err(_) => return Err(format!("Invalid timezone: {}", &timezone)),
+            Err(_) => return Err(format!("Invalid timezone: {}", timezone)),
         };
         self.tz = tz;
         self.workbook.settings.tz = timezone.to_string();

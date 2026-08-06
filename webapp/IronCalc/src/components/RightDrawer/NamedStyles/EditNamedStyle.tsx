@@ -1,24 +1,64 @@
-import type {
-  CellStyle,
-  FmtSettings,
-  IronCalcTheme,
-  Model,
-  StyleIncludes,
+import {
+  BorderStyle,
+  type CellStyle,
+  type Color,
+  type FmtSettings,
+  type HorizontalAlignment,
+  type IronCalcTheme,
+  type Model,
+  type StyleIncludes,
+  type VerticalAlignment,
 } from "@ironcalc/wasm";
-import { Bold, Check, Italic, Strikethrough, Underline } from "lucide-react";
+import {
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
+  ArrowDownToLine,
+  ArrowUpToLine,
+  Bold,
+  Check,
+  Italic,
+  Strikethrough,
+  Underline,
+} from "lucide-react";
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import {
+  ArrowMiddleFromLine,
+  BorderBottomIcon,
+  BorderLeftIcon,
+  BorderNoneIcon,
+  BorderOuterIcon,
+  BorderRightIcon,
+  BorderTopIcon,
+} from "../../../icons";
+import { STYLE_OPTIONS as LINE_STYLE_OPTIONS } from "../../BorderPicker/LineStylePicker";
 import { Button } from "../../Button/Button";
 import { IconButton } from "../../Button/IconButton";
 import ColorPicker from "../../ColorPicker/ColorPicker";
 import { resolveColorToHex } from "../../ColorPicker/util";
 import { NumberFormats } from "../../FormatMenu/formatUtil";
 import { Input } from "../../Input/Input";
+import { Menu } from "../../Menu/Menu";
+import { MenuItem } from "../../Menu/MenuItem";
 import { Select } from "../../Select/Select";
 import { Toggle } from "../../Toggle/Toggle";
 import type { FormatStyle } from "../ConditionalFormatting/FormatStylePicker";
 import "./edit-named-style.css";
-import { getPreviewText } from "./named-styles-utils";
+import {
+  borderStyleToCss,
+  FAINT_PREVIEW_BORDER,
+  getPreviewText,
+  HORIZONTAL_JUSTIFY,
+  VERTICAL_ALIGN_ITEMS,
+} from "./named-styles-utils";
+
+interface BorderSides {
+  top: boolean;
+  right: boolean;
+  bottom: boolean;
+  left: boolean;
+}
 
 export interface SaveError {
   nameError: string;
@@ -41,18 +81,29 @@ export interface NamedStyleSavePayload {
   includes: StyleIncludes;
 }
 
+interface PreviewOptions {
+  includeFont: boolean;
+  includeFill: boolean;
+  includeAlignment: boolean;
+  includeBorder: boolean;
+  horizontalAlign: HorizontalAlignment;
+  verticalAlign: VerticalAlignment;
+  borderSides: BorderSides;
+  borderLineStyle: BorderStyle;
+  borderColor: Color;
+}
+
 function formatStyleToPreview(
   formatStyle: FormatStyle,
   currentTheme: IronCalcTheme,
-  includeFont: boolean,
-  includeFill: boolean,
+  options: PreviewOptions,
 ): CSSProperties {
   const preview: CSSProperties = {};
-  if (includeFill) {
+  if (options.includeFill) {
     preview.backgroundColor =
       resolveColorToHex(formatStyle.fillColor, currentTheme) || undefined;
   }
-  if (includeFont) {
+  if (options.includeFont) {
     const decorations: string[] = [];
     if (formatStyle.underline) {
       decorations.push("underline");
@@ -66,6 +117,23 @@ function formatStyleToPreview(
     preview.fontStyle = formatStyle.italic ? "italic" : undefined;
     preview.textDecoration =
       decorations.length > 0 ? decorations.join(" ") : undefined;
+  }
+  if (options.includeAlignment) {
+    preview.justifyContent = HORIZONTAL_JUSTIFY[options.horizontalAlign];
+    preview.alignItems = VERTICAL_ALIGN_ITEMS[options.verticalAlign];
+  }
+  if (options.includeBorder) {
+    const { top, right, bottom, left } = options.borderSides;
+    const borderCss = borderStyleToCss(
+      options.borderLineStyle,
+      resolveColorToHex(options.borderColor, currentTheme),
+    );
+    // Draw each side explicitly so the box-shadow never doubles a real border.
+    preview.boxShadow = "none";
+    preview.borderTop = top ? borderCss : FAINT_PREVIEW_BORDER;
+    preview.borderRight = right ? borderCss : FAINT_PREVIEW_BORDER;
+    preview.borderBottom = bottom ? borderCss : FAINT_PREVIEW_BORDER;
+    preview.borderLeft = left ? borderCss : FAINT_PREVIEW_BORDER;
   }
   return preview;
 }
@@ -82,6 +150,9 @@ function initFormatStyle(model: Model, style: CellStyle): FormatStyle {
 }
 
 const CUSTOM_VALUE = "__custom__";
+
+// --palette-common-black, same default as the toolbar's BorderPicker
+const DEFAULT_BORDER_COLOR = "#272525";
 
 const EditNamedStyle = ({
   model,
@@ -146,11 +217,62 @@ const EditNamedStyle = ({
   );
   const [includeFont, setIncludeFont] = useState(initialIncludes?.font ?? true);
   const [includeFill, setIncludeFill] = useState(initialIncludes?.fill ?? true);
+  const [includeAlignment, setIncludeAlignment] = useState(
+    initialIncludes?.alignment ?? false,
+  );
+  const [horizontalAlign, setHorizontalAlign] = useState<HorizontalAlignment>(
+    style.alignment?.horizontal ?? "general",
+  );
+  const [verticalAlign, setVerticalAlign] = useState<VerticalAlignment>(
+    style.alignment?.vertical ?? "bottom",
+  );
+  const [includeBorder, setIncludeBorder] = useState(
+    initialIncludes?.border ?? false,
+  );
+  const [borderSides, setBorderSides] = useState<BorderSides>(() => ({
+    top: !!style.border.top?.style,
+    right: !!style.border.right?.style,
+    bottom: !!style.border.bottom?.style,
+    left: !!style.border.left?.style,
+  }));
+  const [borderLineStyle, setBorderLineStyle] = useState<BorderStyle>(() => {
+    const firstSide =
+      style.border.top ??
+      style.border.right ??
+      style.border.bottom ??
+      style.border.left;
+    return (firstSide?.style as BorderStyle) || BorderStyle.Thin;
+  });
+  const [borderColor, setBorderColor] = useState<Color>(() => {
+    const firstSide =
+      style.border.top ??
+      style.border.right ??
+      style.border.bottom ??
+      style.border.left;
+    return firstSide?.color ?? DEFAULT_BORDER_COLOR;
+  });
   const [fontColorOpen, setFontColorOpen] = useState(false);
   const [fillColorOpen, setFillColorOpen] = useState(false);
+  const [borderColorOpen, setBorderColorOpen] = useState(false);
   const fontColorRef = useRef<HTMLButtonElement>(null);
   const fillColorRef = useRef<HTMLButtonElement>(null);
+  const borderColorRef = useRef<HTMLButtonElement>(null);
   const customFmtInputRef = useRef<HTMLInputElement>(null);
+
+  const allBorderSidesOn =
+    borderSides.top &&
+    borderSides.right &&
+    borderSides.bottom &&
+    borderSides.left;
+
+  const noBorderSidesOn =
+    !borderSides.top &&
+    !borderSides.right &&
+    !borderSides.bottom &&
+    !borderSides.left;
+
+  const toggleBorderSide = (side: keyof typeof borderSides) =>
+    setBorderSides((current) => ({ ...current, [side]: !current[side] }));
 
   const toggleFontAttr = (
     key: keyof Pick<FormatStyle, "bold" | "italic" | "underline" | "strike">,
@@ -214,9 +336,23 @@ const EditNamedStyle = ({
       setCustomFmtTouched(true);
       return;
     }
+    const makeBorderItem = (enabled: boolean) =>
+      enabled ? { style: borderLineStyle, color: borderColor } : undefined;
     const newStyle = {
       ...style,
       num_fmt: numFmt,
+      alignment: {
+        horizontal: horizontalAlign,
+        vertical: verticalAlign,
+        wrap_text: style.alignment?.wrap_text ?? false,
+      },
+      border: {
+        ...style.border,
+        top: makeBorderItem(borderSides.top),
+        right: makeBorderItem(borderSides.right),
+        bottom: makeBorderItem(borderSides.bottom),
+        left: makeBorderItem(borderSides.left),
+      },
       fill: {
         ...style.fill,
         color: formatStyle.fillColor || undefined,
@@ -230,8 +366,8 @@ const EditNamedStyle = ({
         color: formatStyle.fontColor,
       },
     };
-    // Border, alignment and protection are not editable in this panel,
-    // so they are always carried over from the base style.
+    // Protection is not editable in this panel, so it is always carried
+    // over from the base style.
     const error = onSave({
       name: name.trim(),
       style: newStyle,
@@ -239,8 +375,8 @@ const EditNamedStyle = ({
         number_format: includeFormat,
         font: includeFont,
         fill: includeFill,
-        border: true,
-        alignment: true,
+        border: includeBorder,
+        alignment: includeAlignment,
         protection: true,
       },
     });
@@ -266,12 +402,17 @@ const EditNamedStyle = ({
         <div className="ic-edit-style-header-box">
           <div
             className="ic-edit-style-preview"
-            style={formatStyleToPreview(
-              formatStyle,
-              currentTheme,
+            style={formatStyleToPreview(formatStyle, currentTheme, {
               includeFont,
               includeFill,
-            )}
+              includeAlignment,
+              includeBorder,
+              horizontalAlign,
+              verticalAlign,
+              borderSides,
+              borderLineStyle,
+              borderColor,
+            })}
           >
             {getPreviewText(
               includeFormat ? numFmt : NumberFormats.AUTO,
@@ -303,9 +444,6 @@ const EditNamedStyle = ({
         <div className="ic-edit-style-styled-box ic-edit-style-section-header">
           <div className="ic-edit-style-section-title">
             {t("named_styles.style_properties")}
-          </div>
-          <div className="ic-edit-style-section-subtitle">
-            {t("named_styles.style_properties_description")}
           </div>
         </div>
 
@@ -358,12 +496,12 @@ const EditNamedStyle = ({
             label={t("named_styles.font_label")}
           />
           {includeFont && (
-            <>
-              <div className="ic-edit-style-subrow">
-                <span className="ic-edit-style-sublabel">
-                  {t("named_styles.font_style_label")}
-                </span>
-                <div className="ic-edit-style-font-buttons">
+            <div className="ic-edit-style-subrow">
+              <span className="ic-edit-style-sublabel">
+                {t("named_styles.font_style_label")}
+              </span>
+              <div className="ic-edit-style-controls-row">
+                <div className="ic-edit-style-button-group">
                   <IconButton
                     icon={<Bold />}
                     pressed={formatStyle.bold}
@@ -389,11 +527,6 @@ const EditNamedStyle = ({
                     onClick={() => toggleFontAttr("strike")}
                   />
                 </div>
-              </div>
-              <div className="ic-edit-style-subrow">
-                <span className="ic-edit-style-sublabel">
-                  {t("named_styles.font_color_label")}
-                </span>
                 <div className="ic-input-control md ic-edit-style-swatch-wrapper">
                   <button
                     ref={fontColorRef}
@@ -427,7 +560,7 @@ const EditNamedStyle = ({
                   theme={currentTheme}
                 />
               </div>
-            </>
+            </div>
           )}
         </div>
         <div className="ic-edit-style-styled-box ic-edit-style-format-group">
@@ -477,6 +610,230 @@ const EditNamedStyle = ({
                 theme={currentTheme}
               />
             </div>
+          )}
+        </div>
+        <div className="ic-edit-style-styled-box ic-edit-style-format-group">
+          <Toggle
+            checked={includeAlignment}
+            onChange={setIncludeAlignment}
+            label={t("named_styles.alignment_label")}
+          />
+          {includeAlignment && (
+            <>
+              <div className="ic-edit-style-subrow">
+                <span className="ic-edit-style-sublabel">
+                  {t("named_styles.horizontal_align_label")}
+                </span>
+                <div className="ic-edit-style-button-group">
+                  <IconButton
+                    icon={<AlignLeft />}
+                    pressed={horizontalAlign === "left"}
+                    aria-label={t("toolbar.align_left")}
+                    onClick={() =>
+                      setHorizontalAlign(
+                        horizontalAlign === "left" ? "general" : "left",
+                      )
+                    }
+                  />
+                  <IconButton
+                    icon={<AlignCenter />}
+                    pressed={horizontalAlign === "center"}
+                    aria-label={t("toolbar.align_center")}
+                    onClick={() =>
+                      setHorizontalAlign(
+                        horizontalAlign === "center" ? "general" : "center",
+                      )
+                    }
+                  />
+                  <IconButton
+                    icon={<AlignRight />}
+                    pressed={horizontalAlign === "right"}
+                    aria-label={t("toolbar.align_right")}
+                    onClick={() =>
+                      setHorizontalAlign(
+                        horizontalAlign === "right" ? "general" : "right",
+                      )
+                    }
+                  />
+                </div>
+              </div>
+              <div className="ic-edit-style-subrow">
+                <span className="ic-edit-style-sublabel">
+                  {t("named_styles.vertical_align_label")}
+                </span>
+                <div className="ic-edit-style-button-group">
+                  <IconButton
+                    icon={<ArrowUpToLine />}
+                    pressed={verticalAlign === "top"}
+                    aria-label={t("toolbar.vertical_align_top")}
+                    onClick={() => setVerticalAlign("top")}
+                  />
+                  <IconButton
+                    icon={<ArrowMiddleFromLine />}
+                    pressed={verticalAlign === "center"}
+                    aria-label={t("toolbar.vertical_align_middle")}
+                    onClick={() => setVerticalAlign("center")}
+                  />
+                  <IconButton
+                    icon={<ArrowDownToLine />}
+                    pressed={verticalAlign === "bottom"}
+                    aria-label={t("toolbar.vertical_align_bottom")}
+                    onClick={() => setVerticalAlign("bottom")}
+                  />
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+        <div className="ic-edit-style-styled-box ic-edit-style-format-group">
+          <Toggle
+            checked={includeBorder}
+            onChange={(checked) => {
+              setIncludeBorder(checked);
+              if (!checked) {
+                setBorderColorOpen(false);
+              }
+            }}
+            label={t("named_styles.border_label")}
+          />
+          {includeBorder && (
+            <>
+              <div className="ic-edit-style-subrow">
+                <span className="ic-edit-style-sublabel">
+                  {t("named_styles.border_label")}
+                </span>
+                <div className="ic-edit-style-controls-row">
+                  <div className="ic-edit-style-button-group">
+                    <IconButton
+                      icon={<BorderOuterIcon />}
+                      pressed={allBorderSidesOn}
+                      aria-label={t("toolbar.borders.all")}
+                      onClick={() =>
+                        setBorderSides({
+                          top: !allBorderSidesOn,
+                          right: !allBorderSidesOn,
+                          bottom: !allBorderSidesOn,
+                          left: !allBorderSidesOn,
+                        })
+                      }
+                    />
+                    <IconButton
+                      icon={<BorderNoneIcon />}
+                      pressed={noBorderSidesOn}
+                      aria-label={t("toolbar.borders.clear")}
+                      onClick={() =>
+                        setBorderSides({
+                          top: false,
+                          right: false,
+                          bottom: false,
+                          left: false,
+                        })
+                      }
+                    />
+                  </div>
+                  <div className="ic-edit-style-button-group">
+                    <IconButton
+                      icon={<BorderTopIcon />}
+                      pressed={borderSides.top}
+                      aria-label={t("toolbar.borders.top")}
+                      onClick={() => toggleBorderSide("top")}
+                    />
+                    <IconButton
+                      icon={<BorderRightIcon />}
+                      pressed={borderSides.right}
+                      aria-label={t("toolbar.borders.right")}
+                      onClick={() => toggleBorderSide("right")}
+                    />
+                    <IconButton
+                      icon={<BorderBottomIcon />}
+                      pressed={borderSides.bottom}
+                      aria-label={t("toolbar.borders.bottom")}
+                      onClick={() => toggleBorderSide("bottom")}
+                    />
+                    <IconButton
+                      icon={<BorderLeftIcon />}
+                      pressed={borderSides.left}
+                      aria-label={t("toolbar.borders.left")}
+                      onClick={() => toggleBorderSide("left")}
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="ic-edit-style-subrow">
+                <span className="ic-edit-style-sublabel">
+                  {t("named_styles.line_style_label")}
+                </span>
+                <div className="ic-edit-style-controls-row">
+                  <Menu
+                    trigger={
+                      <div className="ic-input-control md ic-edit-style-line-style-wrapper">
+                        <button
+                          type="button"
+                          className="ic-edit-style-line-style-trigger"
+                          aria-label={t("toolbar.borders.style")}
+                        >
+                          <span
+                            className={`ic-line-preview ${
+                              LINE_STYLE_OPTIONS.find(
+                                (option) => option.value === borderLineStyle,
+                              )?.previewClassName ?? "thin"
+                            }`}
+                            style={{
+                              color: resolveColorToHex(
+                                borderColor,
+                                currentTheme,
+                              ),
+                            }}
+                          />
+                        </button>
+                      </div>
+                    }
+                  >
+                    {LINE_STYLE_OPTIONS.map((option) => (
+                      <MenuItem
+                        key={option.value}
+                        checked={borderLineStyle === option.value}
+                        onClick={() => setBorderLineStyle(option.value)}
+                      >
+                        <span
+                          className={`ic-line-preview ${option.previewClassName}`}
+                          style={{
+                            color: resolveColorToHex(borderColor, currentTheme),
+                          }}
+                        />
+                      </MenuItem>
+                    ))}
+                  </Menu>
+                  <div className="ic-input-control md ic-edit-style-swatch-wrapper">
+                    <button
+                      ref={borderColorRef}
+                      type="button"
+                      className="ic-edit-style-swatch"
+                      style={{
+                        backgroundColor:
+                          resolveColorToHex(borderColor, currentTheme) ||
+                          DEFAULT_BORDER_COLOR,
+                      }}
+                      onClick={() => setBorderColorOpen(true)}
+                      aria-label={t("toolbar.borders.color")}
+                    />
+                  </div>
+                  <ColorPicker
+                    color={borderColor}
+                    defaultColor={DEFAULT_BORDER_COLOR}
+                    title={t("color_picker.default")}
+                    onChange={(color) => {
+                      setBorderColor(color);
+                      setBorderColorOpen(false);
+                    }}
+                    onClose={() => setBorderColorOpen(false)}
+                    anchorEl={borderColorRef}
+                    open={borderColorOpen}
+                    theme={currentTheme}
+                  />
+                </div>
+              </div>
+            </>
           )}
         </div>
       </div>

@@ -18,6 +18,7 @@
 .ic-named-styles-header-title {
   width: 100%;
   font-size: var(--typography-font-size);
+  color: var(--palette-common-black);
 }
 
 .ic-named-styles-content {
@@ -33,12 +34,13 @@
   justify-content: space-between;
   padding: 0 8px;
   gap: 8px;
+  color: var(--palette-common-black);
   border-bottom: 1px solid var(--palette-grey-300);
 }
 
 .ic-named-styles-edit-header-title {
   flex: 1;
-  font-size: 12px;
+  font-size: var(--typography-font-size);
   font-weight: 500;
 }
 
@@ -111,6 +113,7 @@
 }
 
 .ic-named-styles-tile {
+  box-sizing: border-box;
   height: 32px;
   min-width: 0;
   display: flex;
@@ -175,8 +178,10 @@
 }
 
 .ic-named-styles-manage-item-preview {
+  box-sizing: border-box;
   width: 40px;
   height: 36px;
+  padding: 4px;
   border-radius: 4px;
   box-shadow: inset 0 0 0 1px
     color-mix(in srgb, var(--palette-common-black) 12%, transparent);
@@ -185,8 +190,9 @@
   align-items: center;
   justify-content: center;
   font-size: var(--typography-font-size);
+  line-height: 1;
   font-family: var(--typography-font-family);
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .ic-named-styles-manage-item-name {

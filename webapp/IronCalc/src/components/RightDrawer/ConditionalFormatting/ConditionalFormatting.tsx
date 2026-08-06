@@ -1,7 +1,7 @@
 import type { Dxf, IronCalcTheme, Model } from "@ironcalc/wasm";
 import {
+  ArrowLeft,
   ChevronDown,
-  ChevronLeft,
   ChevronUp,
   Copy,
   PackageOpen,
@@ -216,7 +216,7 @@ const ConditionalFormatting = ({
         <div className="ic-cf-edit-header">
           <Tooltip title={t("conditional_formatting.back_to_list")}>
             <IconButton
-              icon={<ChevronLeft />}
+              icon={<ArrowLeft />}
               onClick={handleCancel}
               aria-label={t("conditional_formatting.back_to_list")}
             />
@@ -272,7 +272,7 @@ const ConditionalFormatting = ({
     const q = searchQuery.trim().toLowerCase();
     return (
       rule.applyTo.toLowerCase().includes(q) ||
-      getRuleDescription({ ...rule, resolveValue: resolveRef })
+      getRuleDescription({ ...rule, resolveValue: resolveRef, t })
         .toLowerCase()
         .includes(q)
     );
@@ -504,6 +504,7 @@ const ConditionalFormatting = ({
                             : getRuleDescription({
                                 ...rule,
                                 resolveValue: resolveRef,
+                                t,
                               })}
                         </div>
                         <div className="ic-cf-list-item-range">

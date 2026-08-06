@@ -1688,7 +1688,6 @@ export default class WorksheetCanvas {
       (selectedColumn < topLeftCell.column && selectedColumn > frozenColumns)
     ) {
       cellOutline.style.visibility = "hidden";
-      cellOutlineHandle.style.visibility = "hidden";
     }
 
     // Position the cell outline and clip it
@@ -2062,6 +2061,9 @@ export default class WorksheetCanvas {
     this.renderRowHeaders(frozenRows, topLeftCell, bottomRightCell);
 
     // square in the top left corner
+    // (extends 0.5px right and down to meet the headers, which start at +0.5)
+    context.fillStyle = this.theme.headerCornerBackground;
+    context.fillRect(0, 0, headerColumnWidth + 0.5, headerRowHeight + 0.5);
     context.beginPath();
     context.strokeStyle = this.theme.gridSeparatorColor;
     context.moveTo(0, 0.5);

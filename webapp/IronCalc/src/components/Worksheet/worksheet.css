@@ -5,7 +5,12 @@
   background: var(--palette-sheet-outline-color);
   cursor: crosshair;
   border-radius: 1px;
-  border: 1px solid white;
+  border: 1px solid var(--palette-common-white);
+}
+
+/* The handle auto-fills (drags) cell content, so it is an edit affordance. */
+.ic-workbook-container--readonly .ironcalc-cell-handle {
+  display: none;
 }
 
 /* Spacer */
