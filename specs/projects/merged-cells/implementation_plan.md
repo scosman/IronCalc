@@ -48,8 +48,14 @@ Recorded 2026-08-06 during the upstream sync; **pre-existing, not introduced by 
 region (`user_model/common.rs`, Phase 2 guard). The batched
 `UserModel::set_user_inputs` — added independently on `fix/batch-set-inputs`, so the two
 never met in review — validates only sheet/row/column and has no equivalent check. A
-batch write (e.g. find-and-replace) can therefore land a value in a covered cell that the
-interactive path refuses, leaving a value the UI never shows.
+batch write can therefore land a value in a covered cell that the interactive path refuses,
+leaving a value the UI never shows but that persists and is written out on save.
+
+The realistic trigger is any consumer that batches a **rectangle** rather than a filtered set of
+cells — a values-paste over a range, say. (A find-and-replace, the use the API's doc comment
+cites, happens to be safe: `merge_cells` clears the covered cells, so they hold nothing and can
+never match a search.) IronCalc's own consumer, FreeCell, hits exactly this via its Paste Values
+command.
 
 The two features were built in separate branches and are both headed upstream as separate
 PRs, so whichever lands second should carry the guard: hoist the covered-cell check out of
