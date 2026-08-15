@@ -530,10 +530,10 @@ impl<'a> UserModel<'a> {
     ///
     /// **The rollback covers values only.** [`Model::set_user_input`] auto-links
     /// URL-shaped input (and styles a newly created link), and this method records
-    /// only [`Diff::SetCellValue`], so neither the rollback nor a later
-    /// [`undo`](UserModel::undo) removes a link the batch created. Route the writes
-    /// through `set_user_input_with_link_diffs` to close that — until then, a batch
-    /// containing URL-shaped values is not fully reversible.
+    /// only cell-value changes, so neither the rollback nor a later
+    /// [`undo`](UserModel::undo) removes a link the batch created. A batch containing
+    /// URL-shaped values is therefore not yet fully reversible; a future revision will
+    /// record the link changes too.
     ///
     /// See also:
     /// * [UserModel::set_user_input]
