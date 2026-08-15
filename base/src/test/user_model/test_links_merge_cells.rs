@@ -203,3 +203,70 @@ fn range_clear_leaves_links_outside_the_range_alone() {
         Ok(Some(external("https://outside.example.com/")))
     );
 }
+
+// --- Structural delete -------------------------------------------------------
+//
+// `delete_rows` / `delete_columns` are where the sync's only hand-resolved hunks
+// live: upstream seeds `diff_list` from `range_link_diffs`, our work adds
+// `old_merge_cells` / `old_frozen_*` to the same `Diff`. Both halves must survive.
+
+#[test]
+fn delete_rows_over_a_merged_region_drops_link_and_merge() {
+    let mut model = model_with_merged_link(10, 10);
+
+    // Rows 2..3 are exactly the merged B2:C3.
+    model.delete_rows(0, 2, 2).unwrap();
+    assert!(merges(&model).is_empty());
+    assert_eq!(model.get_cell_link(0, 2, 2), Ok(None));
+
+    // One undo restores content, link and merge together.
+    model.undo().unwrap();
+    assert_eq!(merges(&model), vec![merge_cell(2, 2, 2, 2)]);
+    assert_eq!(model.get_cell_link(0, 2, 2), Ok(Some(external(LINKED))));
+    assert_eq!(model.get_formatted_cell_value(0, 2, 2).unwrap(), "anchor");
+}
+
+#[test]
+fn delete_rows_above_shifts_the_merged_region_with_its_link() {
+    let mut model = model_with_merged_link(10, 10);
+
+    // Row 1 is above the region: both the merge and the link shift up by one.
+    model.delete_rows(0, 1, 1).unwrap();
+    assert_eq!(merges(&model), vec![merge_cell(1, 2, 2, 2)]);
+    assert_eq!(model.get_cell_link(0, 1, 2), Ok(Some(external(LINKED))));
+    assert_eq!(model.get_cell_link(0, 2, 2), Ok(None));
+
+    model.undo().unwrap();
+    assert_eq!(merges(&model), vec![merge_cell(2, 2, 2, 2)]);
+    assert_eq!(model.get_cell_link(0, 2, 2), Ok(Some(external(LINKED))));
+}
+
+#[test]
+fn delete_columns_over_a_merged_region_drops_link_and_merge() {
+    let mut model = model_with_merged_link(10, 10);
+
+    // Columns 2..3 are exactly the merged B2:C3.
+    model.delete_columns(0, 2, 2).unwrap();
+    assert!(merges(&model).is_empty());
+    assert_eq!(model.get_cell_link(0, 2, 2), Ok(None));
+
+    model.undo().unwrap();
+    assert_eq!(merges(&model), vec![merge_cell(2, 2, 2, 2)]);
+    assert_eq!(model.get_cell_link(0, 2, 2), Ok(Some(external(LINKED))));
+    assert_eq!(model.get_formatted_cell_value(0, 2, 2).unwrap(), "anchor");
+}
+
+#[test]
+fn delete_columns_before_shifts_the_merged_region_with_its_link() {
+    let mut model = model_with_merged_link(10, 10);
+
+    // Column 1 is left of the region: both the merge and the link shift left by one.
+    model.delete_columns(0, 1, 1).unwrap();
+    assert_eq!(merges(&model), vec![merge_cell(2, 1, 2, 2)]);
+    assert_eq!(model.get_cell_link(0, 2, 1), Ok(Some(external(LINKED))));
+    assert_eq!(model.get_cell_link(0, 2, 2), Ok(None));
+
+    model.undo().unwrap();
+    assert_eq!(merges(&model), vec![merge_cell(2, 2, 2, 2)]);
+    assert_eq!(model.get_cell_link(0, 2, 2), Ok(Some(external(LINKED))));
+}

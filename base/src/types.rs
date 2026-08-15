@@ -939,22 +939,26 @@ mod test {
         assert!(!is_valid_hex_color("#ffffff00")); // with alpha channel
     }
 
-    /// Theme index 10 is the hyperlink slot: `set_cell_link` styles a new link with
-    /// `Color::Theme(10, 0.0)`, so a client that resolves theme colours renders links
-    /// blue with no extra work of its own.
+    /// The theme slot `set_cell_link` styles a new link with is the hyperlink slot,
+    /// and it is blue — so a client that resolves theme colours renders links blue
+    /// with no extra work of its own. Bound to `THEME_COLOR_HYPERLINK` rather than a
+    /// literal, so moving the slot fails here instead of passing vacuously.
     #[test]
-    fn test_theme_index_10_is_hyperlink_blue() {
+    fn test_hyperlink_theme_slot_is_blue() {
+        use crate::links::THEME_COLOR_HYPERLINK;
+
         let theme = Theme::default();
         assert_eq!(theme.name, "Office");
-        assert_eq!(theme.resolve(10, 0.0), "#0563C1");
+        assert_eq!(THEME_COLOR_HYPERLINK, 10, "the hyperlink slot is index 10");
+        assert_eq!(theme.resolve(THEME_COLOR_HYPERLINK, 0.0), "#0563C1");
         assert_eq!(
-            Color::Theme(10, 0.0).to_rgb(&theme),
+            Color::Theme(THEME_COLOR_HYPERLINK, 0.0).to_rgb(&theme),
             theme.hlink,
-            "index 10 must resolve through the hlink slot"
+            "the hyperlink slot must resolve through hlink"
         );
 
         // Blue-dominant: the blue channel beats both red and green.
-        let hex = theme.resolve(10, 0.0);
+        let hex = theme.resolve(THEME_COLOR_HYPERLINK, 0.0);
         let channel = |i: usize| u8::from_str_radix(&hex[1 + 2 * i..3 + 2 * i], 16).unwrap();
         let (red, green, blue) = (channel(0), channel(1), channel(2));
         assert!(blue > red && blue > green, "expected a blue, got {hex}");
