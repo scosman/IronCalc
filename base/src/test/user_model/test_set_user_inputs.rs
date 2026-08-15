@@ -1,6 +1,50 @@
 #![allow(clippy::unwrap_used)]
 
 use crate::test::user_model::util::new_empty_user_model;
+use crate::types::{Color, Link};
+use crate::user_model::history::{Diff, QueueDiffs};
+use crate::UserModel;
+
+const URL: &str = "https://www.ironcalc.com/";
+const OTHER_URL: &str = "https://docs.ironcalc.com/";
+const THIRD_URL: &str = "https://third.example/";
+
+fn external(target: &str) -> Link {
+    Link::External {
+        target: target.to_string(),
+        tooltip: None,
+    }
+}
+
+/// Drains the send queue and names, in order, the diffs of the single operation it
+/// holds. Modelled on `last_diff_list` in `test_batch_row_column_diff.rs`, but it
+/// asserts the queue holds exactly one entry so a stale undo entry cannot silently
+/// merge into the result.
+///
+/// Cell state cannot see a *spurious* `SetCellStyle` diff when the cell pre-existed:
+/// its `SetCellValue` snapshot carries the whole `Cell`, style index included, so undo
+/// reconstructs the style from the value diff alone. (A *missing* style diff is visible
+/// in cell state whenever the cell was empty pre-batch.) The recorded diff list is the
+/// only place both directions are observable.
+fn recorded_diffs(model: &mut UserModel) -> Vec<&'static str> {
+    let queue = bitcode::decode::<Vec<QueueDiffs>>(&model.flush_send_queue()).unwrap();
+    let [operation] = &queue[..] else {
+        panic!(
+            "expected exactly one operation in the send queue, got {}",
+            queue.len()
+        );
+    };
+    operation
+        .list
+        .iter()
+        .map(|diff| match diff {
+            Diff::SetCellValue { .. } => "SetCellValue",
+            Diff::SetCellStyle { .. } => "SetCellStyle",
+            Diff::SetCellLink { .. } => "SetCellLink",
+            _ => "other",
+        })
+        .collect()
+}
 
 #[test]
 fn batch_write_is_one_undo_step() {
@@ -223,4 +267,247 @@ fn mid_batch_write_failure_rolls_back_the_writes_already_made() {
     assert_eq!(model.get_cell_content(0, 1, 2).unwrap(), "");
     model.undo().unwrap();
     assert_eq!(model.get_cell_content(0, 2, 3).unwrap(), "");
+}
+
+#[test]
+fn batch_auto_link_is_undone_with_the_batch() {
+    let mut model = new_empty_user_model();
+
+    model
+        .set_user_inputs(&[
+            (0, 1, 1, URL.to_string()),     // A1 — URL-shaped, auto-linked
+            (0, 1, 2, "plain".to_string()), // B1 — not a link
+        ])
+        .unwrap();
+    assert_eq!(model.get_cell_link(0, 1, 1).unwrap(), Some(external(URL)));
+    assert_eq!(model.get_cell_link(0, 1, 2).unwrap(), None);
+    // a newly auto-created link also styles the cell
+    let style = model.get_cell_style(0, 1, 1).unwrap();
+    assert!(style.font.u);
+    assert_eq!(style.font.color, Color::Theme(10, 0.0));
+
+    // One undo reverts the value AND the link AND the link styling.
+    model.undo().unwrap();
+    assert_eq!(model.get_cell_content(0, 1, 1).unwrap(), "");
+    assert_eq!(model.get_cell_link(0, 1, 1).unwrap(), None);
+    let style = model.get_cell_style(0, 1, 1).unwrap();
+    assert!(!style.font.u);
+    assert_eq!(style.font.color, Color::None);
+    assert!(!model.can_undo(), "the batch is a single history entry");
+
+    // A single redo puts value, link and styling back.
+    model.redo().unwrap();
+    assert_eq!(model.get_cell_content(0, 1, 1).unwrap(), URL);
+    assert_eq!(model.get_cell_link(0, 1, 1).unwrap(), Some(external(URL)));
+    let style = model.get_cell_style(0, 1, 1).unwrap();
+    assert!(style.font.u);
+    assert_eq!(style.font.color, Color::Theme(10, 0.0));
+}
+
+#[test]
+fn batch_auto_link_undo_restores_the_previous_link() {
+    let mut model = new_empty_user_model();
+    model.set_user_input(0, 1, 1, URL).unwrap();
+    assert_eq!(model.get_cell_link(0, 1, 1).unwrap(), Some(external(URL)));
+
+    model
+        .set_user_inputs(&[(0, 1, 1, OTHER_URL.to_string())])
+        .unwrap();
+    assert_eq!(
+        model.get_cell_link(0, 1, 1).unwrap(),
+        Some(external(OTHER_URL))
+    );
+
+    // One undo restores the *previous* target, not merely "no link".
+    model.undo().unwrap();
+    assert_eq!(model.get_cell_content(0, 1, 1).unwrap(), URL);
+    assert_eq!(model.get_cell_link(0, 1, 1).unwrap(), Some(external(URL)));
+}
+
+#[test]
+fn batch_emptying_a_linked_cell_undoes_to_the_link() {
+    let mut model = new_empty_user_model();
+    model.set_user_input(0, 1, 1, URL).unwrap();
+
+    // An empty input clears the cell, which also drops its link.
+    model.set_user_inputs(&[(0, 1, 1, String::new())]).unwrap();
+    assert_eq!(model.get_cell_content(0, 1, 1).unwrap(), "");
+    assert_eq!(model.get_cell_link(0, 1, 1).unwrap(), None);
+
+    // One undo restores content and link together.
+    model.undo().unwrap();
+    assert_eq!(model.get_cell_content(0, 1, 1).unwrap(), URL);
+    assert_eq!(model.get_cell_link(0, 1, 1).unwrap(), Some(external(URL)));
+}
+
+#[test]
+fn a_peer_replaying_the_batch_and_its_undo_ends_up_link_free() {
+    let mut model = new_empty_user_model();
+    model
+        .set_user_inputs(&[(0, 1, 1, URL.to_string())])
+        .unwrap();
+    let mut peer = new_empty_user_model();
+    peer.apply_external_diffs(&model.flush_send_queue())
+        .unwrap();
+    assert_eq!(peer.get_cell_link(0, 1, 1).unwrap(), Some(external(URL)));
+
+    // Replaying the batch's *undo* has to remove the link on the peer as well. The
+    // peer only ever sees the recorded diffs, so this fails unless the link change is
+    // in the diff list — clearing a cell's contents does not by itself drop its link.
+    model.undo().unwrap();
+    peer.apply_external_diffs(&model.flush_send_queue())
+        .unwrap();
+    assert_eq!(peer.get_cell_content(0, 1, 1).unwrap(), "");
+    assert_eq!(peer.get_cell_link(0, 1, 1).unwrap(), None);
+    let style = peer.get_cell_style(0, 1, 1).unwrap();
+    assert!(!style.font.u);
+}
+
+/// Seeds C1:C2 and makes B1:B2 a CSE array formula. Writing into B1 is rejected by
+/// `Model::set_user_input`, which is how a batch fails *mid-write* rather than during
+/// the up-front coordinate validation.
+fn seed_array_formula_blocking_b1(model: &mut UserModel) {
+    model.set_user_input(0, 1, 3, "1").unwrap(); // C1
+    model.set_user_input(0, 2, 3, "2").unwrap(); // C2
+    model
+        .set_user_array_formula(0, 1, 2, 1, 2, "=C1:C2")
+        .unwrap();
+}
+
+#[test]
+fn mid_batch_failure_rolls_back_an_auto_created_link() {
+    let mut model = new_empty_user_model();
+    model.set_user_input(0, 1, 1, "seed A1").unwrap();
+    seed_array_formula_blocking_b1(&mut model);
+    let style_before = model.get_cell_style(0, 1, 1).unwrap();
+
+    let result = model.set_user_inputs(&[
+        (0, 1, 1, URL.to_string()),    // A1 — succeeds and auto-links
+        (0, 1, 2, "boom".to_string()), // B1 — inside the array formula, fails
+    ]);
+    assert!(result.is_err(), "writing into an array formula must fail");
+
+    // The rollback takes the link with the value, and leaves the cell looking exactly
+    // as it did. (The style assertion is a plain end-state guard, not a check on the
+    // style diff — see `recorded_diffs` for why cell state cannot see that.)
+    assert_eq!(model.get_cell_content(0, 1, 1).unwrap(), "seed A1");
+    assert_eq!(model.get_cell_link(0, 1, 1).unwrap(), None);
+    assert_eq!(model.get_cell_style(0, 1, 1).unwrap(), style_before);
+
+    // No history entry was recorded for the rejected batch: the next undo walks back
+    // past it, to the array formula, and leaves A1 where the rollback put it.
+    model.undo().unwrap();
+    assert_eq!(model.get_cell_content(0, 1, 2).unwrap(), "");
+    assert_eq!(model.get_cell_content(0, 1, 1).unwrap(), "seed A1");
+}
+
+#[test]
+fn mid_batch_failure_restores_a_replaced_link() {
+    let mut model = new_empty_user_model();
+    model.set_user_input(0, 1, 1, URL).unwrap();
+    seed_array_formula_blocking_b1(&mut model);
+    let style_before = model.get_cell_style(0, 1, 1).unwrap();
+
+    let result = model.set_user_inputs(&[
+        (0, 1, 1, OTHER_URL.to_string()), // A1 — succeeds, retargets the link
+        (0, 1, 2, "boom".to_string()),    // B1 — inside the array formula, fails
+    ]);
+    assert!(result.is_err());
+
+    // The pre-batch link is back, not merely absent.
+    assert_eq!(model.get_cell_content(0, 1, 1).unwrap(), URL);
+    assert_eq!(model.get_cell_link(0, 1, 1).unwrap(), Some(external(URL)));
+    assert_eq!(model.get_cell_style(0, 1, 1).unwrap(), style_before);
+}
+
+#[test]
+fn the_link_style_diff_is_recorded_only_when_the_link_is_new() {
+    let mut model = new_empty_user_model();
+
+    // A1 is empty: the batch creates a link, which also styles the cell, so the style
+    // change must be recorded.
+    model
+        .set_user_inputs(&[(0, 1, 1, URL.to_string())])
+        .unwrap();
+    assert_eq!(
+        recorded_diffs(&mut model),
+        ["SetCellValue", "SetCellStyle", "SetCellLink"]
+    );
+
+    // A1 already carries a link, so retargeting it changes no styling and must record
+    // no style diff — a spurious one would be an invisible no-op in cell state, but it
+    // would still travel to every peer and sit in the history.
+    model
+        .set_user_inputs(&[(0, 1, 1, OTHER_URL.to_string())])
+        .unwrap();
+    assert_eq!(recorded_diffs(&mut model), ["SetCellValue", "SetCellLink"]);
+
+    // A plain value creates no link at all, so neither.
+    model
+        .set_user_inputs(&[(0, 5, 5, "plain".to_string())])
+        .unwrap();
+    assert_eq!(recorded_diffs(&mut model), ["SetCellValue"]);
+
+    // Both rules again, within a single batch: an empty cell written twice is new on
+    // the first write and already linked on the second, so exactly one style diff is
+    // recorded. This is what the per-write `old_link` snapshot buys — snapshotting it
+    // once up front would leave it `None` for the second write and record a second,
+    // spurious style diff.
+    model
+        .set_user_inputs(&[(0, 9, 9, URL.to_string()), (0, 9, 9, OTHER_URL.to_string())])
+        .unwrap();
+    assert_eq!(
+        recorded_diffs(&mut model),
+        [
+            "SetCellValue",
+            "SetCellStyle",
+            "SetCellLink",
+            "SetCellValue",
+            "SetCellLink"
+        ]
+    );
+}
+
+#[test]
+fn a_cell_listed_twice_undoes_through_its_whole_link_chain() {
+    let mut model = new_empty_user_model();
+    // A1 starts out linked, and the batch retargets it twice. The cell's link diffs
+    // therefore form a chain — URL→OTHER_URL, then OTHER_URL→THIRD_URL — that undo has
+    // to unwind in reverse to land back on the original target.
+    //
+    // The pre-existing link is what makes this discriminating. Undo replays the list in
+    // reverse, so any arrangement that keeps only the *last* link diff of a cell — the
+    // obvious "dedupe the redundant diffs" refactor — stops at the intermediate target
+    // instead of the pre-batch one. From an empty cell that would be invisible: the
+    // style diff's undo takes the `range_clear_all` branch for a now-empty cell, which
+    // drops the link whatever the link diffs said.
+    model.set_user_input(0, 1, 1, URL).unwrap();
+    model.flush_send_queue(); // drop the seed's diffs so recorded_diffs sees the batch alone
+
+    model
+        .set_user_inputs(&[
+            (0, 1, 1, OTHER_URL.to_string()),
+            (0, 1, 1, THIRD_URL.to_string()),
+        ])
+        .unwrap();
+    assert_eq!(model.get_cell_content(0, 1, 1).unwrap(), THIRD_URL);
+    assert_eq!(
+        model.get_cell_link(0, 1, 1).unwrap(),
+        Some(external(THIRD_URL))
+    );
+    // Read the diffs before undoing (it drains the queue), but assert them after, so
+    // that a broken chain fails on the undo — the property this test is named for —
+    // rather than on the diff shape.
+    let recorded = recorded_diffs(&mut model);
+
+    // One undo walks the chain all the way back to the pre-batch target.
+    model.undo().unwrap();
+    assert_eq!(model.get_cell_content(0, 1, 1).unwrap(), URL);
+    assert_eq!(model.get_cell_link(0, 1, 1).unwrap(), Some(external(URL)));
+
+    // One link diff per write — both retargets, so neither records a style diff.
+    assert_eq!(
+        recorded,
+        ["SetCellValue", "SetCellLink", "SetCellValue", "SetCellLink"]
+    );
 }
