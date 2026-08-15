@@ -154,6 +154,10 @@ impl<'a> UserModel<'a> {
         let mut seen_cells = HashSet::new();
         // Compute all changes
         let mut changes = Vec::new();
+        // The link each target cell must end up with, collected in this same
+        // iteration so it can never cover a different set of cells than the
+        // values do. It is applied after the values are written (see below).
+        let mut link_changes = Vec::new();
         for (row_offset, column_offset) in
             fill_offsets(row_repeats, column_repeats, source_height, source_width)
         {
@@ -165,6 +169,7 @@ impl<'a> UserModel<'a> {
                     let delta_column = source_column - source_first_column;
                     let target_column = selected_column + delta_column + column_offset;
                     max_column = max_column.max(target_column);
+                    link_changes.push((target_row, target_column, value.link.clone()));
 
                     if value.is_spill {
                         // Spill cells carry no formula/value, but their style should still be copied.
@@ -257,32 +262,30 @@ impl<'a> UserModel<'a> {
             });
         }
         // Paste the links of the copied cells. This runs after the values are
-        // set so that it also overrides any link auto-created by an URL value.
-        for (source_row, data_row) in clipboard {
-            let target_row = selected_row + (source_row - source_first_row);
-            for (source_column, value) in data_row {
-                let target_column = selected_column + (source_column - source_first_column);
-                let old_link = self.model.get_cell_link(sheet, target_row, target_column)?;
-                if old_link == value.link {
-                    continue;
-                }
-                match &value.link {
-                    Some(link) => {
-                        self.model
-                            .set_cell_link(sheet, target_row, target_column, link.clone())?
-                    }
-                    None => self
-                        .model
-                        .delete_cell_link(sheet, target_row, target_column)?,
-                }
-                diff_list.push(Diff::SetCellLink {
-                    sheet,
-                    row: target_row,
-                    column: target_column,
-                    old_value: Box::new(old_link),
-                    new_value: Box::new(value.link.clone()),
-                });
+        // set so that it also overrides any link auto-created by an URL value —
+        // including in every repetition of a fill, where the source cell's
+        // absence of a link must also be reproduced.
+        for (target_row, target_column, link) in link_changes {
+            let old_link = self.model.get_cell_link(sheet, target_row, target_column)?;
+            if old_link == link {
+                continue;
             }
+            match &link {
+                Some(link) => {
+                    self.model
+                        .set_cell_link(sheet, target_row, target_column, link.clone())?
+                }
+                None => self
+                    .model
+                    .delete_cell_link(sheet, target_row, target_column)?,
+            }
+            diff_list.push(Diff::SetCellLink {
+                sheet,
+                row: target_row,
+                column: target_column,
+                old_value: Box::new(old_link),
+                new_value: Box::new(link),
+            });
         }
         if is_cut {
             for row in source_first_row..=source_last_row {

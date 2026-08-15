@@ -6,8 +6,15 @@
 use crate::cf_types::{CfRuleInput, Cfvo, ColorScaleThreshold};
 use crate::expressions::types::Area;
 use crate::test::user_model::util::new_empty_user_model;
-use crate::types::Color;
+use crate::types::{Color, Link};
 use crate::UserModel;
+
+fn external(target: &str) -> Link {
+    Link::External {
+        target: target.to_string(),
+        tooltip: None,
+    }
+}
 
 fn color_scale() -> CfRuleInput {
     CfRuleInput::ColorScale {
@@ -286,5 +293,95 @@ fn cut_into_a_larger_selection_moves_the_cells_once() {
     assert_eq!(model.get_formatted_cell_value(0, 3, 1).unwrap(), "1");
     for row in 4..=6 {
         assert_eq!(model.get_formatted_cell_value(0, row, 1).unwrap(), "");
+    }
+}
+
+// --- Links across a fill -----------------------------------------------------
+//
+// Link paste and value paste are separate passes over the copied cells. They must
+// cover exactly the same target cells, or a fill links only its first repetition
+// (and, worse, leaves the auto-links the value pass created in the rest).
+
+#[test]
+fn paste_fill_repeats_the_copied_link_in_every_repetition() {
+    let mut model = new_empty_user_model();
+    // B4 holds a label — not URL-shaped, so nothing auto-links it — with an
+    // explicit link. Every filled cell must get that link.
+    model.set_user_input(0, 4, 2, "Docs").unwrap();
+    model
+        .set_cell_link(0, 4, 2, external("https://example.com/docs"), None)
+        .unwrap();
+
+    copy_and_paste_over(&mut model, (4, 2, 4, 2), (5, 2, 8, 2));
+
+    for row in 5..=8 {
+        assert_eq!(model.get_formatted_cell_value(0, row, 2).unwrap(), "Docs");
+        assert_eq!(
+            model.get_cell_link(0, row, 2),
+            Ok(Some(external("https://example.com/docs"))),
+            "repetition at row {row} lost the copied link"
+        );
+    }
+
+    // The whole fill, links included, is one undo step.
+    model.undo().unwrap();
+    for row in 5..=8 {
+        assert_eq!(model.get_cell_link(0, row, 2), Ok(None));
+    }
+}
+
+#[test]
+fn paste_fill_repeats_the_absence_of_a_link_in_every_repetition() {
+    let mut model = new_empty_user_model();
+    // B4 holds a URL the user deliberately unlinked. Pasting it re-enters the text
+    // through `set_user_input`, which auto-links it — the link pass must undo that
+    // in every repetition, not just the first.
+    model
+        .set_user_input(0, 4, 2, "https://example.com/")
+        .unwrap();
+    model.delete_cell_link(0, 4, 2).unwrap();
+    assert_eq!(model.get_cell_link(0, 4, 2), Ok(None));
+
+    copy_and_paste_over(&mut model, (4, 2, 4, 2), (5, 2, 8, 2));
+
+    for row in 5..=8 {
+        assert_eq!(
+            model.get_formatted_cell_value(0, row, 2).unwrap(),
+            "https://example.com/"
+        );
+        assert_eq!(
+            model.get_cell_link(0, row, 2),
+            Ok(None),
+            "repetition at row {row} resurrected a link the user had removed"
+        );
+    }
+}
+
+#[test]
+fn paste_fill_repeats_links_of_a_block_in_both_axes() {
+    let mut model = new_empty_user_model();
+    // A1:B1 — only A1 carries a link. Fill C3:F4: two repetitions per axis.
+    model.set_user_input(0, 1, 1, "linked").unwrap();
+    model.set_user_input(0, 1, 2, "plain").unwrap();
+    model
+        .set_cell_link(0, 1, 1, external("https://example.com/"), None)
+        .unwrap();
+
+    copy_and_paste_over(&mut model, (1, 1, 1, 2), (3, 3, 4, 6));
+
+    for row in 3..=4 {
+        for column in [3, 5] {
+            assert_eq!(
+                model.get_cell_link(0, row, column),
+                Ok(Some(external("https://example.com/"))),
+                "({row}, {column}) should carry the link of the copied A1"
+            );
+            assert_eq!(
+                model.get_cell_link(0, row, column + 1),
+                Ok(None),
+                "({row}, {}) should carry no link, like the copied B1",
+                column + 1
+            );
+        }
     }
 }
