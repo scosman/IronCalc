@@ -523,10 +523,17 @@ impl<'a> UserModel<'a> {
     /// Unlike [`paste_csv_string`](UserModel::paste_csv_string) it does not clear a
     /// rectangle first: only the listed cells are touched, so unrelated cells
     /// (formulas, array formulas, typed values) sitting between the targets are left
-    /// untouched. The batch is atomic: coordinates are validated up front and, should
-    /// any write fail part-way, the writes already made are rolled back — so a
-    /// rejected batch never leaves a partial write behind. An empty slice is a no-op
-    /// (no history entry).
+    /// untouched. Coordinates are validated up front, so a bad entry is rejected
+    /// without mutating the model, and should a write fail part-way the **values**
+    /// already written are restored — a rejected batch leaves no partial values
+    /// behind. An empty slice is a no-op (no history entry).
+    ///
+    /// **The rollback covers values only.** [`Model::set_user_input`] auto-links
+    /// URL-shaped input (and styles a newly created link), and this method records
+    /// only [`Diff::SetCellValue`], so neither the rollback nor a later
+    /// [`undo`](UserModel::undo) removes a link the batch created. Route the writes
+    /// through `set_user_input_with_link_diffs` to close that — until then, a batch
+    /// containing URL-shaped values is not fully reversible.
     ///
     /// See also:
     /// * [UserModel::set_user_input]
@@ -571,9 +578,10 @@ impl<'a> UserModel<'a> {
         }
 
         // Apply the writes. Because every old_value was snapshotted above, if a write
-        // fails part-way we can restore the writes already made (and any partial
-        // mutation from the failing call) to their pre-batch values before surfacing
-        // the error, keeping the batch all-or-nothing.
+        // fails part-way we can restore the values already written (and any partial
+        // mutation from the failing call) to their pre-batch state before surfacing
+        // the error. The snapshots are `SetCellValue` diffs, so this restores values
+        // only — see the doc comment on the auto-link gap.
         for (index, (sheet, row, column, value)) in inputs.iter().enumerate() {
             if let Err(e) = self
                 .model

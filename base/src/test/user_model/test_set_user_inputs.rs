@@ -188,3 +188,39 @@ fn batch_propagates_as_one_diff_list() {
     assert_eq!(peer.get_cell_content(0, 1, 1).unwrap(), "a");
     assert_eq!(peer.get_cell_content(0, 2, 2).unwrap(), "b");
 }
+
+#[test]
+fn mid_batch_write_failure_rolls_back_the_writes_already_made() {
+    let mut model = new_empty_user_model();
+    model.set_user_input(0, 1, 1, "seed A1").unwrap();
+    model.set_user_input(0, 1, 3, "1").unwrap(); // C1
+    model.set_user_input(0, 2, 3, "2").unwrap(); // C2
+
+    // B1:B2 is a CSE array formula: writing into it is rejected by
+    // `Model::set_user_input`, which is how a batch fails *mid-write* rather than
+    // during the up-front coordinate validation.
+    model
+        .set_user_array_formula(0, 1, 2, 1, 2, "=C1:C2")
+        .unwrap();
+
+    let result = model.set_user_inputs(&[
+        (0, 1, 1, "written".to_string()), // A1 — succeeds, then must be rolled back
+        (0, 1, 2, "boom".to_string()),    // B1 — part of the array formula, fails
+        (0, 5, 5, "never".to_string()),   // E5 — never attempted
+    ]);
+    assert!(result.is_err(), "writing into an array formula must fail");
+
+    // The successful write is undone and the untouched cell was never written.
+    assert_eq!(model.get_cell_content(0, 1, 1).unwrap(), "seed A1");
+    assert_eq!(model.get_cell_content(0, 5, 5).unwrap(), "");
+    // The array formula survived intact.
+    assert_eq!(model.get_formatted_cell_value(0, 1, 2).unwrap(), "1");
+    assert_eq!(model.get_formatted_cell_value(0, 2, 2).unwrap(), "2");
+
+    // No history entry was recorded for the rejected batch: undoing walks back to
+    // the array formula, then the seed edits.
+    model.undo().unwrap();
+    assert_eq!(model.get_cell_content(0, 1, 2).unwrap(), "");
+    model.undo().unwrap();
+    assert_eq!(model.get_cell_content(0, 2, 3).unwrap(), "");
+}
