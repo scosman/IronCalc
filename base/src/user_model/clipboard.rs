@@ -12,7 +12,7 @@ use crate::{
     cf_types::ConditionalFormatting,
     expressions::types::{Area, CellReferenceIndex},
     model::CellStructure,
-    types::{ArrayKind, Cell, Style},
+    types::{ArrayKind, Cell, Link, Style},
     UserModel,
 };
 
@@ -28,6 +28,10 @@ pub struct ClipboardCell {
     text: String,
     is_spill: bool,
     style: Style,
+    // the link attached to the cell, if any (`default` keeps older clipboard
+    // payloads without the field deserializable)
+    #[serde(default)]
+    link: Option<Link>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -61,12 +65,14 @@ impl<'a> UserModel<'a> {
                     self.model.get_cell_structure(sheet, row, column)?,
                     CellStructure::SpillArray { .. } | CellStructure::SpillDynamic { .. }
                 );
+                let link = self.model.get_cell_link(sheet, row, column)?;
                 data_row.insert(
                     column,
                     ClipboardCell {
                         text: content,
                         is_spill,
                         style,
+                        link,
                     },
                 );
                 text_row.push(text);
@@ -222,6 +228,8 @@ impl<'a> UserModel<'a> {
                 }
             }
         }
+        // Clearing the target area also removes its links: capture them for undo
+        diff_list.extend(self.range_link_diffs(target_area)?);
         // clear the whole area (this resets array formulas)
         self.model.range_clear_contents(target_area)?;
         // set the new values and styles
@@ -248,6 +256,34 @@ impl<'a> UserModel<'a> {
                 new_value: Box::new(style),
             });
         }
+        // Paste the links of the copied cells. This runs after the values are
+        // set so that it also overrides any link auto-created by an URL value.
+        for (source_row, data_row) in clipboard {
+            let target_row = selected_row + (source_row - source_first_row);
+            for (source_column, value) in data_row {
+                let target_column = selected_column + (source_column - source_first_column);
+                let old_link = self.model.get_cell_link(sheet, target_row, target_column)?;
+                if old_link == value.link {
+                    continue;
+                }
+                match &value.link {
+                    Some(link) => {
+                        self.model
+                            .set_cell_link(sheet, target_row, target_column, link.clone())?
+                    }
+                    None => self
+                        .model
+                        .delete_cell_link(sheet, target_row, target_column)?,
+                }
+                diff_list.push(Diff::SetCellLink {
+                    sheet,
+                    row: target_row,
+                    column: target_column,
+                    old_value: Box::new(old_link),
+                    new_value: Box::new(value.link.clone()),
+                });
+            }
+        }
         if is_cut {
             for row in source_first_row..=source_last_row {
                 for column in source_first_column..=source_last_column {
@@ -269,6 +305,19 @@ impl<'a> UserModel<'a> {
                         height: 1,
                         old_value: vec![vec![old_value.clone()]],
                     });
+
+                    // a cut also moves the link away from the source cell
+                    let old_link = self.model.get_cell_link(source_sheet, row, column)?;
+                    if let Some(old_link) = old_link {
+                        self.model.delete_cell_link(source_sheet, row, column)?;
+                        diff_list.push(Diff::SetCellLink {
+                            sheet: source_sheet,
+                            row,
+                            column,
+                            old_value: Box::new(Some(old_link)),
+                            new_value: Box::new(None),
+                        });
+                    }
 
                     // If the source is a dynamic formula anchor, range_clear_contents
                     // would erase its entire spill — including cells that were just
@@ -494,18 +543,17 @@ impl<'a> UserModel<'a> {
             }
         }
 
+        // Clearing the target area also removes its links: capture them for undo
+        let mut diff_list = self.range_link_diffs(&paste_area)?;
         self.model.range_clear_contents(&paste_area)?;
 
         // Second pass: write values and build diff list.
-        let mut diff_list = Vec::new();
         let mut row = area.row;
         let mut last_column = area.column;
         for row_data in &records {
             let mut column = area.column;
             for value in row_data {
                 let old_value = old_values.remove(&(row, column)).unwrap_or(None);
-                self.model
-                    .set_user_input(sheet, row, column, value.to_string())?;
                 diff_list.push(Diff::SetCellValue {
                     sheet,
                     row,
@@ -513,6 +561,14 @@ impl<'a> UserModel<'a> {
                     new_value: value.to_string(),
                     old_value: Box::new(old_value),
                 });
+                // pasted URLs are auto-linked: capture the link and style diffs too
+                self.set_user_input_with_link_diffs(
+                    sheet,
+                    row,
+                    column,
+                    value.to_string(),
+                    &mut diff_list,
+                )?;
                 column += 1;
             }
             last_column = last_column.max(column - 1);

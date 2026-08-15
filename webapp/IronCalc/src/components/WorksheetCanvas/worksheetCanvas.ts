@@ -1,8 +1,9 @@
-import type { CellStyle, Model } from "@ironcalc/wasm";
+import type { CellLink, CellStyle, Model } from "@ironcalc/wasm";
 import { columnNameFromNumber } from "@ironcalc/wasm";
 import { getColor } from "../Editor/util";
 import type { Cell } from "../types";
 import type { WorkbookState } from "../workbookState";
+import { CellLinks, type LinkHoverCell } from "./cellLinks";
 import {
   drawBorder,
   drawBorderLine,
@@ -14,6 +15,8 @@ import {
 import {
   COLUMN_WIDTH_SCALE,
   cellPadding,
+  headerColumnWidth,
+  headerRowHeight,
   LAST_COLUMN,
   LAST_ROW,
   ROW_HEIGH_SCALE,
@@ -44,11 +47,12 @@ export interface CanvasSettings {
   };
   onColumnWidthChanges: (sheet: number, column: number, width: number) => void;
   onRowHeightChanges: (sheet: number, row: number, height: number) => void;
+  onLinkHover?: (cell: LinkHoverCell | null) => void;
+  onHideLinkTooltip?: () => void;
+  linkTooltipCell: LinkHoverCell | null;
   refresh: () => void;
 }
 
-export const headerRowHeight = 28;
-export const headerColumnWidth = 30;
 export const devicePixelRatio = window.devicePixelRatio || 1;
 
 export const frozenSeparatorWidth = 3;
@@ -66,6 +70,7 @@ interface TextProperties {
   underlined: boolean;
   strike: boolean;
   lines: [string, number, number, number][];
+  link: CellLink | null;
 }
 export default class WorksheetCanvas {
   sheetWidth: number;
@@ -111,6 +116,8 @@ export default class WorksheetCanvas {
   cells: TextProperties[];
   spills: Map<string, number>;
 
+  private cellLinks: CellLinks;
+
   theme: Theme;
 
   constructor(options: CanvasSettings) {
@@ -147,6 +154,18 @@ export default class WorksheetCanvas {
     // a cell marked as "spill" means its left border should be skipped
     this.spills = new Map<string, number>();
     this.cells = [];
+
+    this.cellLinks = new CellLinks(this, {
+      onLinkHover: options.onLinkHover,
+      onHideTooltip: options.onHideLinkTooltip,
+      tooltipCell: options.linkTooltipCell,
+    });
+  }
+
+  // Follows a cell link: opens external targets in a new tab, navigates to
+  // internal references
+  followLink(link: CellLink): void {
+    this.cellLinks.followLink(link);
   }
 
   setScrollPosition(scrollPosition: { left: number; top: number }): void {
@@ -449,6 +468,8 @@ export default class WorksheetCanvas {
 
     this.cells = [];
 
+    this.cellLinks.setSheetLinks(this.model.getLinks(selectedSheet));
+
     const frozenColumns = this.model.getFrozenColumnsCount(selectedSheet);
     const frozenRows = this.model.getFrozenRowsCount(selectedSheet);
 
@@ -583,6 +604,10 @@ export default class WorksheetCanvas {
 
     const { font, color: textColor, fontSize } = this.getFontStyle(style);
 
+    // The link is only used for the hover tooltip: it does not affect how the
+    // cell looks. The link styling (color, underline) is part of the cell style.
+    const link = this.cellLinks.getLink(row, column);
+
     // Number = 1,
     // Text = 2,
     // LogicalValue = 4,
@@ -636,6 +661,7 @@ export default class WorksheetCanvas {
       underlined: style.font?.u || false,
       strike: style.font?.strike || false,
       lines: [] as [string, number, number, number][],
+      link,
     };
 
     lines.forEach((text, line) => {
@@ -1939,6 +1965,9 @@ export default class WorksheetCanvas {
 
     const { topLeftCell, bottomRightCell } = this.getVisibleCells();
     this.computeCellsText();
+    // The cell geometry may have changed (scroll, resize, edits): a link
+    // tooltip anchored to a cell that moved or lost its link must go.
+    this.cellLinks.validateTooltip();
 
     const frozenColumns = this.model.getFrozenColumnsCount(selectedSheet);
     const frozenRows = this.model.getFrozenRowsCount(selectedSheet);

@@ -1,5 +1,6 @@
 mod test_add_delete_sheets;
 mod test_array_formulas;
+mod test_auto_link;
 mod test_autofill_columns;
 mod test_autofill_rows;
 mod test_batch_row_column_diff;
@@ -21,6 +22,7 @@ mod test_hidden_columns;
 mod test_keyboard_navigation;
 mod test_language_switch;
 mod test_last_empty_cell;
+mod test_links;
 mod test_merge_cells;
 mod test_move_sheet;
 mod test_multi_row_column;

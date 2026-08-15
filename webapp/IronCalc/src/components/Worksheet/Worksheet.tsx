@@ -10,20 +10,21 @@ import {
 import { useTranslation } from "react-i18next";
 import Editor from "../Editor/Editor";
 import type { Cell } from "../types";
+import type { LinkHoverCell } from "../WorksheetCanvas/cellLinks";
 import {
   COLUMN_WIDTH_SCALE,
+  headerColumnWidth,
+  headerRowHeight,
   LAST_COLUMN,
   LAST_ROW,
   ROW_HEIGH_SCALE,
 } from "../WorksheetCanvas/constants";
-import WorksheetCanvas, {
-  headerColumnWidth,
-  headerRowHeight,
-} from "../WorksheetCanvas/worksheetCanvas";
+import WorksheetCanvas from "../WorksheetCanvas/worksheetCanvas";
 import type { WorkbookState } from "../workbookState";
 import CellContextMenu from "./ContextMenus/Cell";
 import ColumnHeaderContextMenu from "./ContextMenus/ColumnHeader";
 import RowHeaderContextMenu from "./ContextMenus/RowHeader";
+import LinkTooltip from "./LinkTooltip";
 import usePointer from "./usePointer";
 import "./worksheet.css";
 import { Alert, Prompt } from "../Modal";
@@ -51,6 +52,8 @@ const Worksheet = forwardRef(
       onCut: () => void;
       onCopy: () => void;
       onPaste: () => void;
+      onEditLink?: (row: number, column: number) => void;
+      onDeleteLink?: (row: number, column: number) => void;
     },
     ref,
   ) => {
@@ -88,6 +91,35 @@ const Worksheet = forwardRef(
     const [rowHeightDefault, setRowHeightDefault] = useState("");
 
     const ignoreScrollEventRef = useRef(false);
+
+    // The cell whose link tooltip is shown (null if hidden). The canvas does
+    // the hover hit-testing and reports it through onLinkHover; the tooltip
+    // itself is the LinkTooltip component. Hiding is delayed so the pointer
+    // can travel from the cell into the tooltip without dismissing it.
+    const [linkTooltipCell, setLinkTooltipCell] =
+      useState<LinkHoverCell | null>(null);
+    const linkTooltipHideTimeout = useRef<ReturnType<typeof setTimeout> | null>(
+      null,
+    );
+    const cancelHideLinkTooltip = (): void => {
+      if (linkTooltipHideTimeout.current !== null) {
+        clearTimeout(linkTooltipHideTimeout.current);
+        linkTooltipHideTimeout.current = null;
+      }
+    };
+    const hideLinkTooltip = (): void => {
+      cancelHideLinkTooltip();
+      setLinkTooltipCell(null);
+    };
+    const scheduleHideLinkTooltip = (): void => {
+      if (linkTooltipHideTimeout.current !== null) {
+        return;
+      }
+      linkTooltipHideTimeout.current = setTimeout(() => {
+        linkTooltipHideTimeout.current = null;
+        setLinkTooltipCell(null);
+      }, 300);
+    };
 
     const { model, workbookState, refresh, canEdit, onCut, onCopy, onPaste } =
       props;
@@ -167,6 +199,23 @@ const Worksheet = forwardRef(
           model.setColumnsWidth(sheet, columnStart, columnEnd, width);
           worksheetCanvas.current?.renderSheet();
         },
+        onLinkHover: (cell) => {
+          if (cell) {
+            cancelHideLinkTooltip();
+            // keep the state (and the tooltip) when still on the same cell
+            setLinkTooltipCell((previous) =>
+              previous &&
+              previous.row === cell.row &&
+              previous.column === cell.column
+                ? previous
+                : cell,
+            );
+          } else if (linkTooltipCell !== null) {
+            scheduleHideLinkTooltip();
+          }
+        },
+        onHideLinkTooltip: hideLinkTooltip,
+        linkTooltipCell,
         onRowHeightChanges(sheet, row, height) {
           if (height < 0) {
             return;
@@ -496,6 +545,19 @@ const Worksheet = forwardRef(
           />
           <div className="ic-worksheet-row-resize-guide" ref={rowResizeGuide} />
           <div className="ic-worksheet-column-headers" ref={columnHeaders} />
+          {linkTooltipCell ? (
+            <LinkTooltip
+              cell={linkTooltipCell}
+              onFollow={(link) => {
+                worksheetCanvas.current?.followLink(link);
+              }}
+              onEdit={props.onEditLink}
+              onDelete={props.onDeleteLink}
+              onHide={hideLinkTooltip}
+              onPointerEnter={cancelHideLinkTooltip}
+              onPointerLeave={scheduleHideLinkTooltip}
+            />
+          ) : null}
         </div>
         <CellContextMenu
           open={cellContextMenuOpen}
