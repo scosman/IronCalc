@@ -938,4 +938,25 @@ mod test {
         assert!(!is_valid_hex_color("#fff")); // CSS shorthand
         assert!(!is_valid_hex_color("#ffffff00")); // with alpha channel
     }
+
+    /// Theme index 10 is the hyperlink slot: `set_cell_link` styles a new link with
+    /// `Color::Theme(10, 0.0)`, so a client that resolves theme colours renders links
+    /// blue with no extra work of its own.
+    #[test]
+    fn test_theme_index_10_is_hyperlink_blue() {
+        let theme = Theme::default();
+        assert_eq!(theme.name, "Office");
+        assert_eq!(theme.resolve(10, 0.0), "#0563C1");
+        assert_eq!(
+            Color::Theme(10, 0.0).to_rgb(&theme),
+            theme.hlink,
+            "index 10 must resolve through the hlink slot"
+        );
+
+        // Blue-dominant: the blue channel beats both red and green.
+        let hex = theme.resolve(10, 0.0);
+        let channel = |i: usize| u8::from_str_radix(&hex[1 + 2 * i..3 + 2 * i], 16).unwrap();
+        let (red, green, blue) = (channel(0), channel(1), channel(2));
+        assert!(blue > red && blue > green, "expected a blue, got {hex}");
+    }
 }
