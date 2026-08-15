@@ -524,16 +524,16 @@ impl<'a> UserModel<'a> {
     /// rectangle first: only the listed cells are touched, so unrelated cells
     /// (formulas, array formulas, typed values) sitting between the targets are left
     /// untouched. Coordinates are validated up front, so a bad entry is rejected
-    /// without mutating the model, and should a write fail part-way the **values**
-    /// already written are restored — a rejected batch leaves no partial values
-    /// behind. An empty slice is a no-op (no history entry).
+    /// without mutating the model, and should a write fail part-way, the values, links
+    /// and link styling already written are restored — but not a number format or quote
+    /// prefix the input implied, matching [`set_user_input`](UserModel::set_user_input)'s
+    /// own undo. An empty slice is a no-op (no history entry).
     ///
-    /// **The rollback covers values only.** [`Model::set_user_input`] auto-links
-    /// URL-shaped input (and styles a newly created link), and this method records
-    /// only cell-value changes, so neither the rollback nor a later
-    /// [`undo`](UserModel::undo) removes a link the batch created. A batch containing
-    /// URL-shaped values is therefore not yet fully reversible; a future revision will
-    /// record the link changes too.
+    /// [`Model::set_user_input`] auto-links URL-shaped input (and styles a newly
+    /// created link), and an empty input removes the link of the cell it clears.
+    /// Those link and style changes are recorded next to the value changes, so they
+    /// are covered both by the mid-batch rollback and by a later
+    /// [`undo`](UserModel::undo).
     ///
     /// See also:
     /// * [UserModel::set_user_input]
@@ -547,7 +547,7 @@ impl<'a> UserModel<'a> {
         //     true pre-batch state (never a value that an earlier write in this same
         //     batch already changed — e.g. by clearing a dynamic spill), and a
         //     mid-batch write failure can be rolled back to exactly that state.
-        let mut diff_list = Vec::with_capacity(inputs.len());
+        let mut value_diffs = Vec::with_capacity(inputs.len());
         for (sheet, row, column, value) in inputs {
             let (sheet, row, column) = (*sheet, *row, *column);
             let worksheet = self.model.workbook.worksheet(sheet)?;
@@ -565,7 +565,7 @@ impl<'a> UserModel<'a> {
             } else {
                 old_value
             };
-            diff_list.push(Diff::SetCellValue {
+            value_diffs.push(Diff::SetCellValue {
                 sheet,
                 row,
                 column,
@@ -573,25 +573,47 @@ impl<'a> UserModel<'a> {
                 old_value: Box::new(old_value),
             });
         }
-        if diff_list.is_empty() {
+        if value_diffs.is_empty() {
             return Ok(());
         }
 
-        // Apply the writes. Because every old_value was snapshotted above, if a write
-        // fails part-way we can restore the values already written (and any partial
-        // mutation from the failing call) to their pre-batch state before surfacing
-        // the error. The snapshots are `SetCellValue` diffs, so this restores values
-        // only — see the doc comment on the auto-link gap.
-        for (index, (sheet, row, column, value)) in inputs.iter().enumerate() {
-            if let Err(e) = self
-                .model
-                .set_user_input(*sheet, *row, *column, value.to_string())
-            {
-                // Revert cells 0..=index from their snapshots (apply_undo_diff_list
-                // restores in reverse and re-evaluates). Ignore a secondary error so
-                // the original cause is what the caller sees.
-                let revert = diff_list[..=index].to_vec();
-                let _ = self.apply_undo_diff_list(&revert);
+        // Apply the writes, growing the batch's diff list as we go: each cell
+        // contributes its pre-snapshotted value diff plus whatever
+        // `set_user_input_with_link_diffs` records for the link side effects of the
+        // write (auto-linking a URL — which also styles a cell that was not linked
+        // before — or dropping the link of a cell an empty input clears).
+        //
+        // The value diff goes in *before* the write, so if that write fails the diff
+        // list still describes everything the batch touched, including any partial
+        // mutation of the failing cell. That makes `diff_list` the rollback as well as
+        // the history entry.
+        //
+        // Note what makes replaying it undone land on the pre-batch state, because the
+        // two kinds of diff get there differently: the `SetCellValue` old values are
+        // pre-batch snapshots taken in the pass above, while the link and style old
+        // values are captured per write, inside the helper, against whatever the
+        // earlier writes of this same batch left behind. The list is nonetheless exact
+        // because the diffs of a cell are chained in write order and
+        // `apply_undo_diff_list` replays the whole list in reverse: a cell written more
+        // than once telescopes back through every intermediate state. Dropping a cell's
+        // redundant-looking intermediate link diffs would break that — undo would stop
+        // at an intermediate target instead of the pre-batch one.
+        //
+        // `inputs.len()` is a lower bound on the capacity: writes that touch a link
+        // grow the list further.
+        let mut diff_list = Vec::with_capacity(inputs.len());
+        for (value_diff, (sheet, row, column, value)) in value_diffs.into_iter().zip(inputs) {
+            diff_list.push(value_diff);
+            if let Err(e) = self.set_user_input_with_link_diffs(
+                *sheet,
+                *row,
+                *column,
+                value.to_string(),
+                &mut diff_list,
+            ) {
+                // apply_undo_diff_list restores in reverse and re-evaluates. Ignore a
+                // secondary error so the original cause is what the caller sees.
+                let _ = self.apply_undo_diff_list(&diff_list);
                 return Err(e);
             }
         }
