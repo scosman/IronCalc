@@ -120,11 +120,15 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
     }
 
     let mut fonts = Vec::new();
+    // `<fonts>` is optional in ECMA-376; an absent one means the workbook has no font records at
+    // all, so fall back to the single default font (index 0 is what every `xf` references).
     let font_nodes = style_sheet
         .children()
-        .filter(|n| n.has_tag_name("fonts"))
-        .collect::<Vec<Node>>()[0];
-    for font in font_nodes.children() {
+        .find(|n| n.has_tag_name("fonts"));
+    if font_nodes.is_none() {
+        fonts.push(Font::default());
+    }
+    for font in font_nodes.into_iter().flat_map(|n| n.children()) {
         let mut sz = 11;
         let mut name = "Inter".to_string();
         // NOTE: In Excel you can have simple underline or double underline
@@ -206,11 +210,15 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
     }
 
     let mut fills = Vec::new();
+    // Optional in ECMA-376. Absent ⇒ no fills; seed the default (index 0, the "no fill" that every
+    // `xf` references) so downstream `fill_id` lookups stay in bounds.
     let fill_nodes = style_sheet
         .children()
-        .filter(|n| n.has_tag_name("fills"))
-        .collect::<Vec<Node>>()[0];
-    for fill in fill_nodes.children() {
+        .find(|n| n.has_tag_name("fills"));
+    if fill_nodes.is_none() {
+        fills.push(Fill::default());
+    }
+    for fill in fill_nodes.into_iter().flat_map(|n| n.children()) {
         let pattern_fill = fill
             .children()
             .filter(|n| n.has_tag_name("patternFill"))
@@ -250,11 +258,15 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
     }
 
     let mut borders = Vec::new();
+    // Optional in ECMA-376. Absent ⇒ no borders; seed the default empty border at index 0 so
+    // downstream `border_id` lookups stay in bounds.
     let border_nodes = style_sheet
         .children()
-        .filter(|n| n.has_tag_name("borders"))
-        .collect::<Vec<Node>>()[0];
-    for border in border_nodes.children() {
+        .find(|n| n.has_tag_name("borders"));
+    if border_nodes.is_none() {
+        borders.push(Border::default());
+    }
+    for border in border_nodes.into_iter().flat_map(|n| n.children()) {
         let diagonal_up = get_bool_false(border, "diagonal_up");
         let diagonal_down = get_bool_false(border, "diagonal_down");
         let left = get_border(border, "left", theme, indexed)?;
@@ -277,8 +289,12 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
     let cell_style_xfs_nodes = style_sheet
         .children()
         .filter(|n| n.has_tag_name("cellStyleXfs"))
-        .collect::<Vec<Node>>()[0];
-    for xfs in cell_style_xfs_nodes.children() {
+        .collect::<Vec<Node>>();
+    // Optional in ECMA-376. Absent ⇒ seed the default `xf` at index 0 (cell `xfId` defaults to 0).
+    if cell_style_xfs_nodes.is_empty() {
+        cell_style_xfs.push(CellStyleXfs::default());
+    }
+    for xfs in cell_style_xfs_nodes.first().into_iter().flat_map(|n| n.children()) {
         let num_fmt_id = get_number(xfs, "numFmtId");
         let font_id = get_number(xfs, "fontId");
         let fill_id = get_number(xfs, "fillId");
@@ -306,11 +322,15 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
 
     let mut cell_styles = Vec::new();
     let mut style_names = HashMap::new();
+    // `<cellStyles>` is optional in ECMA-376 (§18.8.4 lists it as minOccurs=0) and is omitted by
+    // most non-Excel writers (NPOI, openpyxl, server-side exporters). Indexing `[0]` on the empty
+    // vec panicked the whole import; a workbook without it simply has no named cell styles, which
+    // the empty `cell_styles`/`style_names` below already express.
     let cell_style_nodes = style_sheet
         .children()
         .filter(|n| n.has_tag_name("cellStyles"))
-        .collect::<Vec<Node>>()[0];
-    for cell_style in cell_style_nodes.children() {
+        .collect::<Vec<Node>>();
+    for cell_style in cell_style_nodes.first().into_iter().flat_map(|n| n.children()) {
         let name = get_attribute(&cell_style, "name")?.to_string();
         let xf_id = get_number(cell_style, "xfId");
         let builtin_id = get_number(cell_style, "builtinId");
@@ -332,8 +352,13 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
     let cell_xfs_nodes = style_sheet
         .children()
         .filter(|n| n.has_tag_name("cellXfs"))
-        .collect::<Vec<Node>>()[0];
-    for xfs in cell_xfs_nodes.children() {
+        .collect::<Vec<Node>>();
+    // Optional in ECMA-376, but every cell's `s` attribute indexes into it — absent, seed the
+    // default xf at index 0 so cell style lookups stay in bounds.
+    if cell_xfs_nodes.is_empty() {
+        cell_xfs.push(CellXfs::default());
+    }
+    for xfs in cell_xfs_nodes.first().into_iter().flat_map(|n| n.children()) {
         // `xfId` is optional on a cellXfs <xf> (it references cellStyleXfs;
         // many Excel/LibreOffice files omit it). Default to 0 when absent.
         let xf_id = xfs
@@ -707,5 +732,65 @@ mod indexed_color_tests {
             resolve(r#"<c theme="3" tint="0.0"/>"#),
             Color::Theme(3, 0.0)
         );
+    }
+
+    // A `<styleSheet>` written by NPOI/openpyxl omits `<cellStyles>` (optional per ECMA-376
+    // §18.8.4). Indexing the empty node vec panicked the whole import; the sheet must load, keep
+    // the entries it does declare, and report no named cell styles.
+    #[test]
+    fn missing_cell_styles_does_not_panic() {
+        let minimal = concat!(
+            "<styleSheet>",
+            "<numFmts count=\"0\"></numFmts>",
+            "<fonts count=\"1\"><font><sz val=\"11\"/><color indexed=\"8\"/>",
+            "<name val=\"Calibri\"/><family val=\"2\"/></font></fonts>",
+            "<fills count=\"2\"><fill><patternFill patternType=\"none\"/></fill>",
+            "<fill><patternFill patternType=\"darkGray\"/></fill></fills>",
+            "<borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border></borders>",
+            "<cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>",
+            "<cellXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/></cellXfs>",
+            "</styleSheet>",
+        );
+        let mut archive = archive_of(minimal);
+        let styles = load_styles(&mut archive, &Theme::default()).unwrap();
+        assert_eq!(styles.fonts.len(), 1);
+        assert_eq!(styles.fills.len(), 2);
+        assert_eq!(styles.borders.len(), 1);
+        assert_eq!(styles.cell_xfs.len(), 1);
+        assert!(styles.cell_styles.is_empty());
+    }
+
+    // Every optional collection missing at once: each falls back to its index-0 default rather
+    // than panicking, so cell `s`/`fontId`/`fillId`/`borderId` lookups stay in bounds.
+    #[test]
+    fn empty_style_sheet_falls_back_to_defaults() {
+        let mut archive = archive_of("<styleSheet></styleSheet>");
+        let styles = load_styles(&mut archive, &Theme::default()).unwrap();
+        assert_eq!(styles.fonts, vec![Font::default()]);
+        assert_eq!(styles.fills, vec![Fill::default()]);
+        assert_eq!(styles.borders, vec![Border::default()]);
+        assert_eq!(styles.cell_xfs, vec![CellXfs::default()]);
+        assert_eq!(styles.cell_style_xfs, vec![CellStyleXfs::default()]);
+        assert!(styles.cell_styles.is_empty());
+    }
+
+    // The declaration present but empty (`<cellStyles count="0"/>`) must behave like the missing
+    // case, not index into a childless node's nonexistent entries.
+    #[test]
+    fn empty_cell_styles_element_is_accepted() {
+        let xml = concat!(
+            "<styleSheet>",
+            "<fonts count=\"1\"><font><sz val=\"11\"/></font></fonts>",
+            "<fills count=\"1\"><fill><patternFill patternType=\"none\"/></fill></fills>",
+            "<borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border></borders>",
+            "<cellStyleXfs count=\"1\"><xf numFmtId=\"0\"/></cellStyleXfs>",
+            "<cellXfs count=\"1\"><xf numFmtId=\"0\"/></cellXfs>",
+            "<cellStyles count=\"0\"></cellStyles>",
+            "</styleSheet>",
+        );
+        let mut archive = archive_of(xml);
+        let styles = load_styles(&mut archive, &Theme::default()).unwrap();
+        assert_eq!(styles.cell_xfs.len(), 1);
+        assert!(styles.cell_styles.is_empty());
     }
 }
